@@ -1,0 +1,7 @@
+packages:
+  - 'apps/*'
+  - 'packages/*'
+
+# Vite / vitest 依赖 esbuild 的原生二进制，必须允许其安装脚本。
+allowBuilds:
+  esbuild: true

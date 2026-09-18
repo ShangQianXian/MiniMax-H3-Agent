@@ -1,0 +1,31 @@
+{
+  "name": "minimax-h3-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "MiniMax H3 Agent — 画布 + 节点式视频生成工作流 WebUI",
+  "engines": {
+    "node": ">=22.6"
+  },
+  "scripts": {
+    "dev": "concurrently -k -n web,api -c cyan,magenta \"pnpm -C apps/web dev\" \"pnpm -C apps/server dev\"",
+    "dev:mock": "concurrently -k -n web,api -c cyan,magenta \"pnpm -C apps/web dev\" \"cross-env MOCK_H3=1 POLL_INTERVAL_MS=1200 node apps/server/src/bin.ts\"",
+    "dev:web": "pnpm -C apps/web dev",
+    "dev:server": "pnpm -C apps/server dev",
+    "build:web": "pnpm -C apps/web build",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/react": "^16.3.3",
+    "@types/node": "^24.0.0",
+    "concurrently": "^9.1.2",
+    "cross-env": "^10.1.0",
+    "jsdom": "^30.0.1",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4",
+    "zod": "^4.1.11"
+  }
+}

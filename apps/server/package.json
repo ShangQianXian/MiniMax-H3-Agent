@@ -1,0 +1,18 @@
+{
+  "name": "@h3/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch src/bin.ts",
+    "start": "node src/bin.ts"
+  },
+  "dependencies": {
+    "@h3/shared": "workspace:*",
+    "express": "^5.1.0",
+    "zod": "^4.1.11"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.3"
+  }
+}

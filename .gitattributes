@@ -1,0 +1,17 @@
+# Windows 批处理文件必须用 CRLF 换行，否则 cmd.exe 会在解析时直接报错
+# （症状是双击后窗口一闪而过、或提示 "The syntax of the command is incorrect."）。
+# 这个仓库在非 Windows 环境下编辑文件时容易把换行写成 LF，所以在这里钉死。
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# 其余文件统一用 LF
+*.ts   text eol=lf
+*.tsx  text eol=lf
+*.mjs  text eol=lf
+*.js   text eol=lf
+*.json text eol=lf
+*.md   text eol=lf
+*.css  text eol=lf
+*.html text eol=lf
+*.yaml text eol=lf
+*.yml  text eol=lf

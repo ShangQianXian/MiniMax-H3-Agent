@@ -1,0 +1,457 @@
+@import 'tailwindcss';
+
+@theme {
+  --color-ink-950: #07090d;
+  --color-ink-900: #0b0e14;
+  --color-ink-850: #0f131b;
+  --color-ink-800: #141924;
+  --color-ink-700: #1b2230;
+  --color-ink-600: #262f40;
+  --color-ink-500: #3a4557;
+  --color-mist-400: #6b7688;
+  --color-mist-300: #98a3b5;
+  --color-mist-200: #c3cbd8;
+  --color-mist-100: #e6eaf1;
+  --color-accent-500: #3b82f6;
+  --color-accent-400: #60a5fa;
+  --color-accent-300: #93c5fd;
+  --color-cyan-glow: #6ee7ff;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--color-ink-950);
+  color: var(--color-mist-100);
+  font-family: 'Inter', 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  font-size: 14px;
+  overflow: hidden;
+}
+
+/* ── 滚动条 ── */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-ink-600) transparent;
+}
+*::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--color-ink-600);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--color-ink-500);
+  background-clip: content-box;
+}
+
+/* ── 画布 ── */
+.react-flow {
+  background: var(--color-ink-950);
+}
+.react-flow__background {
+  background: var(--color-ink-950);
+}
+.react-flow__node {
+  font-family: inherit;
+}
+.react-flow__handle {
+  width: 11px;
+  height: 11px;
+  border-radius: 999px;
+  border: 2px solid var(--color-ink-900);
+  background: var(--color-mist-400);
+  transition: transform 120ms ease, background 120ms ease;
+}
+.react-flow__handle:hover {
+  transform: scale(1.25);
+}
+.react-flow__handle.port-text {
+  background: #a78bfa;
+}
+.react-flow__handle.port-media {
+  background: #38bdf8;
+}
+.react-flow__handle.port-video {
+  background: #22c55e;
+}
+.react-flow__handle.port-any {
+  background: var(--color-mist-400);
+}
+.react-flow__handle-left {
+  left: -6px;
+}
+.react-flow__handle-right {
+  right: -6px;
+}
+/* 节点顶部留了 32px 给悬停操作条，端口手柄按内容区居中 */
+.min-node .react-flow__handle-left,
+.min-node .react-flow__handle-right {
+  top: calc(50% + 16px);
+}
+.react-flow__edge-path {
+  stroke-width: 2;
+}
+.react-flow__edge.selected .react-flow__edge-path {
+  stroke: var(--color-accent-400);
+}
+.react-flow__edge.edge-invalid .react-flow__edge-path {
+  stroke: #f43f5e;
+  stroke-dasharray: 5 4;
+}
+.react-flow__attribution {
+  display: none;
+}
+.react-flow__controls-button {
+  background: var(--color-ink-800);
+  border-bottom: 1px solid var(--color-ink-700);
+  fill: var(--color-mist-200);
+}
+.react-flow__controls-button:hover {
+  background: var(--color-ink-700);
+}
+.react-flow__minimap {
+  background: var(--color-ink-900) !important;
+  border: 1px solid var(--color-ink-700);
+  border-radius: 10px;
+}
+.react-flow__selection {
+  background: rgba(59, 130, 246, 0.08);
+  border: 1px solid var(--color-accent-500);
+}
+
+/* ── 动效 ── */
+@keyframes h3-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.55);
+  }
+  50% {
+    opacity: 0.65;
+    box-shadow: 0 0 0 6px rgba(59, 130, 246, 0);
+  }
+}
+.status-running {
+  animation: h3-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes h3-shimmer {
+  0% {
+    background-position: -220% 0;
+  }
+  100% {
+    background-position: 220% 0;
+  }
+}
+.shimmer {
+  background-image: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(110, 231, 255, 0.22) 50%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  background-size: 220% 100%;
+  animation: h3-shimmer 1.6s linear infinite;
+}
+
+/* ── 表单基础件 ── */
+.field {
+  width: 100%;
+  background: var(--color-ink-900);
+  border: 1px solid var(--color-ink-600);
+  border-radius: 8px;
+  padding: 7px 9px;
+  color: var(--color-mist-100);
+  font-size: 13px;
+  outline: none;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+.field:focus {
+  border-color: var(--color-accent-500);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+}
+.field:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+select.field {
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5 6 8l3-3.5' stroke='%2398a3b5' stroke-width='1.4' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  padding-right: 26px;
+}
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-radius: 8px;
+  border: 1px solid var(--color-ink-600);
+  background: var(--color-ink-800);
+  color: var(--color-mist-100);
+  padding: 6px 11px;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 120ms ease, border-color 120ms ease, opacity 120ms ease;
+}
+.btn:hover:not(:disabled) {
+  background: var(--color-ink-700);
+  border-color: var(--color-ink-500);
+}
+.btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.btn-primary {
+  background: var(--color-accent-500);
+  border-color: var(--color-accent-500);
+  color: #fff;
+}
+.btn-primary:hover:not(:disabled) {
+  background: #2f74e0;
+  border-color: #2f74e0;
+}
+.btn-danger {
+  background: rgba(244, 63, 94, 0.14);
+  border-color: rgba(244, 63, 94, 0.45);
+  color: #fda4af;
+}
+.btn-danger:hover:not(:disabled) {
+  background: rgba(244, 63, 94, 0.24);
+}
+.btn-ghost {
+  background: transparent;
+  border-color: transparent;
+}
+.btn-ghost:hover:not(:disabled) {
+  background: var(--color-ink-800);
+  border-color: var(--color-ink-600);
+}
+.btn-xs {
+  padding: 3px 7px;
+  font-size: 12px;
+  border-radius: 6px;
+}
+.panel {
+  background: var(--color-ink-900);
+  border: 1px solid var(--color-ink-700);
+  border-radius: 12px;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 11px;
+  line-height: 18px;
+  border: 1px solid var(--color-ink-600);
+  background: var(--color-ink-800);
+  color: var(--color-mist-300);
+  white-space: nowrap;
+}
+.mono {
+  font-family: 'JetBrains Mono', 'Cascadia Mono', Consolas, monospace;
+}
+.text-2xs {
+  font-size: 11px;
+}
+
+/* ── 极简控件（对齐参考图） ── */
+
+/* 分段控件：生成方式 / 清晰度 */
+.seg {
+  display: flex;
+  gap: 6px;
+}
+.seg-item {
+  flex: 1;
+  border-radius: 10px;
+  border: 1px solid var(--color-ink-600);
+  background: transparent;
+  color: var(--color-mist-300);
+  padding: 7px 10px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+.seg-item:hover:not(:disabled) {
+  border-color: var(--color-ink-500);
+  color: var(--color-mist-100);
+}
+.seg-item[data-active='true'] {
+  background: var(--color-ink-700);
+  border-color: var(--color-ink-500);
+  color: var(--color-mist-100);
+}
+.seg-item:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+/* 紧凑变体：有声 / 无声 这类短选项 */
+.seg-compact .seg-item {
+  flex: 0 0 auto;
+  min-width: 66px;
+  padding: 6px 14px;
+}
+
+/* 小块选项：时长 */
+.tile {
+  border-radius: 9px;
+  border: 1px solid var(--color-ink-600);
+  background: transparent;
+  color: var(--color-mist-300);
+  padding: 6px 0;
+  min-width: 46px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+.tile:hover:not(:disabled) {
+  border-color: var(--color-ink-500);
+  color: var(--color-mist-100);
+}
+.tile[data-active='true'] {
+  background: var(--color-ink-700);
+  border-color: var(--color-ink-500);
+  color: var(--color-mist-100);
+}
+.tile:disabled {
+  opacity: 0.28;
+  cursor: not-allowed;
+}
+
+/* 比例卡片：图标 + 名称 */
+.ratio-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 78px;
+  height: 72px;
+  border-radius: 10px;
+  border: 1px solid var(--color-ink-600);
+  background: transparent;
+  color: var(--color-mist-300);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+.ratio-tile:hover:not(:disabled) {
+  border-color: var(--color-ink-500);
+  color: var(--color-mist-100);
+}
+.ratio-tile[data-active='true'] {
+  background: var(--color-ink-700);
+  border-color: var(--color-ink-500);
+  color: var(--color-mist-100);
+}
+.ratio-tile:disabled {
+  opacity: 0.28;
+  cursor: not-allowed;
+}
+.ratio-glyph {
+  border: 1.5px solid currentColor;
+  border-radius: 2px;
+  opacity: 0.85;
+}
+
+/* 画布悬浮控件（右上角） */
+.canvas-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border-radius: 10px;
+  border: 1px solid var(--color-ink-700);
+  background: rgba(15, 19, 27, 0.92);
+  padding: 3px;
+  backdrop-filter: blur(8px);
+}
+.canvas-controls button {
+  min-width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  color: var(--color-mist-300);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 12px;
+}
+.canvas-controls button:hover:not(:disabled) {
+  background: var(--color-ink-700);
+  color: var(--color-mist-100);
+}
+.canvas-controls button[data-active='true'] {
+  background: var(--color-ink-700);
+  color: var(--color-mist-100);
+}
+.canvas-controls button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+/* 设置面板分组标题 */
+.panel-label {
+  font-size: 12px;
+  color: var(--color-mist-400);
+  margin-bottom: 8px;
+}
+
+/* 「仅画布」：收起左右两侧面板，最大化画布 */
+body[data-canvas-only='true'] .sidebar-slot,
+body[data-canvas-only='true'] .inspector-slot,
+body[data-canvas-only='true'] .status-slot {
+  display: none;
+}
+
+/* 极简节点：默认近乎无边框，选中时才给一圈细描边 */
+.min-node {
+  border-radius: 12px;
+  border: 1px solid rgba(58, 69, 87, 0.55);
+  background: #0b0e14;
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+.min-node[data-selected='true'] {
+  border-color: var(--color-mist-200);
+  box-shadow: 0 0 0 1px rgba(230, 234, 241, 0.35);
+}
+.min-node[data-dim='true'] {
+  opacity: 0.55;
+}
+.min-node input,
+.min-node textarea,
+.min-node select {
+  color: var(--color-mist-100);
+}
+/* 节点内部的裸输入：没有边框，直接写在卡片上 */
+.bare-field {
+  width: 100%;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--color-mist-100);
+}
+.bare-field::placeholder {
+  color: var(--color-mist-400);
+}

@@ -1,0 +1,28 @@
+node_modules/
+.pnpm-store/
+dist/
+build/
+coverage/
+*.tsbuildinfo
+
+# 本地数据：SQLite 库、素材、产物、密钥
+data/
+.vitest-data/
+.env
+.env.local
+
+# 编辑器 / 系统
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+
+# 日志
+*.log
+npm-debug.log*
+
+# 编辑器 / 工具写入的临时目录
+*.tmp
+.*.tmpdir/
+*.tmpdir/
