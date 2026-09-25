@@ -6,6 +6,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { FlowCanvas } from '../canvas/FlowCanvas.tsx';
 import { TopBar } from './TopBar.tsx';
 import { LeftSidebar } from './LeftSidebar.tsx';
+import { WorkspaceEmpty } from './ProjectManager.tsx';
 import { InspectorPanel } from './InspectorPanel.tsx';
 import { StatusBar } from './StatusBar.tsx';
 import { ComposerPanel } from './ComposerPanel.tsx';
@@ -21,6 +22,7 @@ export function AppShell() {
   const save = useGraph((s) => s.save);
   const activeProjectId = useGraph((s) => s.activeProjectId);
   const activeWorkflowId = useGraph((s) => s.activeWorkflowId);
+  const workspaceBusy = useGraph((s) => s.workspaceBusy);
   const nodes = useGraph((s) => s.nodes);
   const graphSignature = useGraph((s) => s.graphSignature);
   const workflowName = useGraph((s) => s.workflowName);
@@ -135,7 +137,7 @@ export function AppShell() {
   }, [bootstrap]);
 
   return (
-    <div className="relative flex h-full flex-col bg-ink-950">
+    <div className="app-shell relative flex h-full flex-col">
       <TopBar />
 
       <div className="relative flex min-h-0 flex-1">
@@ -143,10 +145,10 @@ export function AppShell() {
           <LeftSidebar />
         </div>
 
-        <main className="relative min-w-0 flex-1">
-          <FlowCanvas />
+        <main className="workspace-canvas relative min-w-0 flex-1" inert={workspaceBusy}>
+          {activeWorkflowId ? <FlowCanvas /> : <WorkspaceEmpty />}
 
-          {composerOpen && <ComposerPanel />}
+          {activeWorkflowId && composerOpen && <ComposerPanel />}
 
           {loadError && (
             <div className="absolute left-3 top-3 z-20 max-w-[520px] rounded-lg border border-rose-500/40 bg-rose-950/80 p-2.5 text-[12px] text-rose-200 shadow-xl">
@@ -163,7 +165,7 @@ export function AppShell() {
             </div>
           )}
 
-          {nodes.length === 0 && !loadError && <EmptyCanvasHint />}
+          {activeWorkflowId && nodes.length === 0 && !loadError && <EmptyCanvasHint />}
         </main>
 
         <div className="inspector-slot contents">{inspectorOpen && <InspectorPanel />}</div>
@@ -181,7 +183,7 @@ export function AppShell() {
             <h2 className="text-[15px] font-medium">{confirmRequest.title}</h2>
             <p className="mt-1.5 text-[12px] leading-relaxed text-mist-300">{confirmRequest.message}</p>
             <p className="mt-2 text-[12px] text-amber-300">
-              参数：{confirmRequest.estimateText || '—'}。确认后将真实调用 MiniMax 接口并产生费用。
+              参数：{confirmRequest.estimateText || '—'}。真实 API 模式会产生费用；模拟模式不调用真实接口。
             </p>
             <label className="mt-3 flex items-center gap-2 text-[11px] text-mist-400">
               <input
@@ -211,12 +213,12 @@ function EmptyCanvasHint() {
   const insertSkill = useGraph((s) => s.insertSkill);
 
   return (
-    <div className="pointer-events-none absolute inset-x-0 top-[16%] z-10 flex justify-center">
-      <div className="pointer-events-auto w-[420px] rounded-2xl border border-ink-700 bg-ink-900/90 p-5 text-center backdrop-blur">
-        <h2 className="text-[15px] font-medium">开始搭建你的第一个工作流</h2>
+    <div className="pointer-events-none absolute inset-x-0 top-[15%] z-10 flex justify-center">
+      <div className="pointer-events-auto empty-canvas-hint">
+        <h2 className="text-[15px] font-medium">把灵感，连成画面。</h2>
         <p className="mt-1.5 text-[12px] leading-relaxed text-mist-400">
-          在下方创作台填写提示词并添加素材，点「发送」即可自动铺好节点；
-          也可以从左侧节点库拖入节点，或用下面的 Skill 一键展开。
+          写下创意，添加参考，让 H3 完成下一个镜头。
+          也可以选择一个模板，从节点开始探索。
         </p>
         <div className="mt-3 flex flex-wrap justify-center gap-1.5">
           {skills.slice(0, 4).map((skill) => (

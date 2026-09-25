@@ -4,7 +4,7 @@
  * 对应两个真实反馈：
  *   1. 「右上角的 × 点不动」—— 拖动抓手层盖住了关闭按钮，把点击吃掉了。
  *      抓手必须 pointer-events:none，事件上完全透明。
- *   2. 「面板太长」—— 改成三列横向布局，宽度按视口自适应。
+ *   2. 参数面板跟随节点定位，并在视口内保持可访问。
  *
  * jsdom 里没法复现真实的命中测试，所以这里断言的是「修复的本质」：
  * 抓手层不参与事件 + 面板里能正常点到关闭按钮 + 拖动只认非控件区域。
@@ -18,6 +18,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createElement, type ReactNode } from 'react';
 import { ReactFlow, ReactFlowProvider } from '@xyflow/react';
 import { NodeFloatingPanel } from './NodeFloatingPanel.tsx';
+import { useCanvasBridge } from './canvas-bridge.ts';
 
 const NODE_ID = 'node-1';
 
@@ -38,6 +39,7 @@ beforeAll(() => {
 
 afterEach(() => {
   cleanup();
+  useCanvasBridge.getState().unregister();
   document.body.innerHTML = '';
 });
 
@@ -104,12 +106,18 @@ describe('关闭按钮不被拖动抓手挡住', () => {
 });
 
 describe('尺寸与拖动', () => {
+  it('定位包含画布相对于浏览器的侧栏和顶栏偏移', () => {
+    useCanvasBridge.getState().setRect({ left: 252, top: 46, width: 760, height: 650 });
+    renderPanel(createElement('div', null, '内容'));
+    expect(Number.parseFloat(panelRoot().style.left)).toBe(372);
+    expect(Number.parseFloat(panelRoot().style.top)).toBe(436);
+  });
   it('面板宽度自适应视口，且不超过首选宽度', () => {
     renderPanel(createElement('div', null, '内容'));
 
     const width = Number.parseFloat(panelRoot().style.width);
-    // jsdom 默认视口 1024，减去两侧 12px 边距 → 1000，被首选宽度 760 收住
-    expect(width).toBeLessThanOrEqual(760);
+    // jsdom 默认视口 1024，由首选宽度 420 收住。
+    expect(width).toBeLessThanOrEqual(420);
     expect(width).toBeGreaterThanOrEqual(300);
   });
 

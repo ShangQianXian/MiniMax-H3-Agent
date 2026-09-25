@@ -69,6 +69,7 @@ interface GraphState {
   selectedNodeId: string | null;
   run: RunState;
   saving: boolean;
+  workspaceBusy: boolean;
   savedAt: number | null;
   loadError: string | null;
 
@@ -113,8 +114,8 @@ interface GraphState {
   selectWorkflow: (workflowId: string) => Promise<void>;
   createWorkflow: (name: string) => Promise<void>;
   deleteWorkflow: (workflowId: string) => Promise<void>;
-  renameWorkflow: (name: string) => void;
-  save: () => Promise<void>;
+  renameWorkflow: (workflowId: string, name: string) => Promise<void>;
+  save: (strict?: boolean) => Promise<void>;
   reload: () => Promise<void>;
   importGraph: (graph: WorkflowGraph, name?: string) => Promise<void>;
   exportGraph: () => WorkflowGraph;
@@ -198,11 +199,11 @@ function collectUpstream(nodeId: string, edges: CanvasEdge[]): string[] {
 }
 
 /**
- * 已经落盘过的工作流内容签名与名称。
+ * 已经落盘过的工作流内容签名。名称通过独立接口保存，避免被自动保存覆盖。
  * 文件级 Map 而不是 store 字段：它不是 UI 状态，变化也不需要触发渲染。
  */
 const lastSavedSignature = new Map<string, string>();
-const lastSavedName = new Map<string, string>();
+let saveQueue: Promise<void> = Promise.resolve();
 
 export const useGraph = create<GraphState>((rawSet, get) => {
   /**
@@ -214,6 +215,77 @@ export const useGraph = create<GraphState>((rawSet, get) => {
     const { nodes, edges } = get();
     rawSet({ graphSignature: graphSignature(nodes, edges) } as never);
   };
+
+  const clearWorkflow = () => set({
+    activeWorkflowId: null, workflowName: '未命名工作流', nodes: [], edges: [],
+    past: [], future: [], selectedNodeId: null, issues: [], savedAt: null, loadError: null,
+  });
+  const loadWorkflow = async (workflowId: string) => {
+    const { workflow } = await api.getWorkflow(workflowId);
+    const loadedNodes = workflow.graph.nodes.map((n) => ({
+      id: n.id,
+      type: n.kind,
+      position: n.position,
+      data: {
+        kind: n.kind,
+        label: nodeLabel(n.kind, n.params),
+        params: n.params,
+        ...(n.disabled !== undefined ? { disabled: n.disabled } : {}),
+      },
+    })) as CanvasNode[];
+    const loadedEdges = workflow.graph.edges.map((e) => ({
+      id: e.id,
+      source: e.source,
+      sourceHandle: e.sourceHandle,
+      target: e.target,
+      targetHandle: e.targetHandle,
+      type: 'default',
+    })) as CanvasEdge[];
+
+    // 记下「刚读进来的内容」，这样刚打开就被自动保存触发时不会产生一次无意义的 PUT
+    lastSavedSignature.set(workflow.id, graphSignature(loadedNodes, loadedEdges));
+
+    set({
+      activeProjectId: workflow.projectId,
+      activeWorkflowId: workflow.id,
+      workflowName: workflow.name,
+      nodes: loadedNodes,
+      edges: loadedEdges,
+      past: [],
+      future: [],
+      selectedNodeId: null,
+      issues: [],
+      loadError: null,
+      savedAt: workflow.updatedAt * 1000,
+    });
+  };
+  const loadProject = async (projectId: string) => {
+    const { items: workflows } = await api.listWorkflows(projectId);
+    if (workflows[0]) await loadWorkflow(workflows[0].id);
+    else clearWorkflow();
+    set({ activeProjectId: projectId, workflows });
+  };
+  // 串行管理操作，避免快速切换时旧请求覆盖新选择。
+  let workspaceQueue: Promise<void> = Promise.resolve();
+  let pendingOperations = 0;
+  const manage = (operation: () => Promise<void>): Promise<void> => {
+    pendingOperations += 1;
+    set({ workspaceBusy: true });
+    const result = workspaceQueue.then(operation).finally(() => {
+      pendingOperations -= 1;
+      set({ workspaceBusy: pendingOperations > 0 });
+    });
+    workspaceQueue = result.catch(() => undefined);
+    return result;
+  };
+  const nameOf = (name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed || trimmed.length > 80) throw new Error('名称需为 1–80 个字符，不能只包含空格。');
+    return trimmed;
+  };
+  const refreshWorkflowCount = () => set((state) => ({
+    projects: state.projects.map((p) => p.id === state.activeProjectId ? { ...p, workflowCount: state.workflows.length } : p),
+  }));
 
   return {
   projects: [],
@@ -230,6 +302,7 @@ export const useGraph = create<GraphState>((rawSet, get) => {
   selectedNodeId: null,
   run: { running: false, total: 0, done: 0, label: '' },
   saving: false,
+  workspaceBusy: false,
   savedAt: null,
   loadError: null,
   past: [],
@@ -289,7 +362,7 @@ export const useGraph = create<GraphState>((rawSet, get) => {
         {
           ...connection,
           id: `e-${connection.source}-${connection.sourceHandle}-${connection.target}-${connection.targetHandle}`,
-          type: 'smoothstep',
+          type: 'default',
           animated: false,
         },
         state.edges,
@@ -461,105 +534,80 @@ export const useGraph = create<GraphState>((rawSet, get) => {
     }
   },
 
-  createProject: async (name) => {
+  createProject: (name) => manage(async () => {
+    name = nameOf(name);
+    await get().save(true);
     const { project } = await api.createProject({ name });
     const { items: projects } = await api.listProjects();
-    set({ projects, activeProjectId: project.id });
-    await get().selectWorkflow(project.id ? (await api.listWorkflows(project.id)).items[0]?.id ?? '' : '');
-  },
-
-  updateProject: async (projectId, patch) => {
-    await api.updateProject(projectId, patch);
-    const { items: projects } = await api.listProjects();
     set({ projects });
-  },
+    await loadProject(project.id);
+  }),
 
-  deleteProject: async (projectId) => {
+  updateProject: (projectId, patch) => manage(async () => {
+    if (patch.name !== undefined) patch = { ...patch, name: nameOf(patch.name) };
+    const { project } = await api.updateProject(projectId, patch);
+    set((state) => ({ projects: state.projects.map((p) => p.id === projectId ? { ...p, ...project } : p) }));
+  }),
+
+  deleteProject: (projectId) => manage(async () => {
+    await get().save(true);
     await api.deleteProject(projectId);
-    const { items: projects } = await api.listProjects();
+    const projects = get().projects.filter((p) => p.id !== projectId);
     set({ projects });
-    const next = projects[0];
-    if (next) await get().selectProject(next.id);
-    else set({ activeProjectId: null, activeWorkflowId: null, workflows: [], nodes: [], edges: [] });
-  },
+    if (get().activeProjectId !== projectId) return;
+    clearWorkflow();
+    set({ activeProjectId: null, workflows: [] });
+    if (projects[0]) await loadProject(projects[0].id);
+  }),
 
-  selectProject: async (projectId) => {
-    const { items: workflows } = await api.listWorkflows(projectId);
-    set({ activeProjectId: projectId, workflows });
-    const first = workflows[0];
-    if (first) {
-      await get().selectWorkflow(first.id);
-    } else {
-      set({ activeWorkflowId: null, nodes: [], edges: [], workflowName: '未命名工作流' });
-    }
-  },
+  selectProject: (projectId) => manage(async () => {
+    await get().save(true);
+    await loadProject(projectId);
+  }),
 
-  selectWorkflow: async (workflowId) => {
+  selectWorkflow: (workflowId) => manage(async () => {
     if (!workflowId) return;
-    const { workflow } = await api.getWorkflow(workflowId);
-    const loadedNodes = workflow.graph.nodes.map((n) => ({
-      id: n.id,
-      type: n.kind,
-      position: n.position,
-      data: {
-        kind: n.kind,
-        label: nodeLabel(n.kind, n.params),
-        params: n.params,
-        ...(n.disabled !== undefined ? { disabled: n.disabled } : {}),
-      },
-    })) as CanvasNode[];
-    const loadedEdges = workflow.graph.edges.map((e) => ({
-      id: e.id,
-      source: e.source,
-      sourceHandle: e.sourceHandle,
-      target: e.target,
-      targetHandle: e.targetHandle,
-      type: 'smoothstep',
-    })) as CanvasEdge[];
+    await get().save(true);
+    await loadWorkflow(workflowId);
+  }),
 
-    // 记下「刚读进来的内容」，这样刚打开就被自动保存触发时不会产生一次无意义的 PUT
-    lastSavedSignature.set(workflow.id, graphSignature(loadedNodes, loadedEdges));
-    lastSavedName.set(workflow.id, workflow.name);
-
-    set({
-      activeWorkflowId: workflow.id,
-      workflowName: workflow.name,
-      nodes: loadedNodes,
-      edges: loadedEdges,
-      past: [],
-      future: [],
-      selectedNodeId: null,
-      savedAt: workflow.updatedAt * 1000,
-    });
-  },
-
-  createWorkflow: async (name) => {
+  createWorkflow: (name) => manage(async () => {
+    name = nameOf(name);
     const projectId = get().activeProjectId;
-    if (!projectId) return;
+    if (!projectId) throw new Error('请先新建或选择一个项目。');
+    await get().save(true);
     const { workflow } = await api.createWorkflow({ projectId, name });
-    const { items: workflows } = await api.listWorkflows(projectId);
-    set({ workflows });
-    await get().selectWorkflow(workflow.id);
-  },
+    set((state) => ({ workflows: [...state.workflows, workflow] }));
+    refreshWorkflowCount();
+    await loadWorkflow(workflow.id);
+  }),
 
-  deleteWorkflow: async (workflowId) => {
+  deleteWorkflow: (workflowId) => manage(async () => {
+    await get().save(true);
     await api.deleteWorkflow(workflowId);
-    const projectId = get().activeProjectId;
-    if (!projectId) return;
-    const { items: workflows } = await api.listWorkflows(projectId);
+    lastSavedSignature.delete(workflowId);
+    const workflows = get().workflows.filter((w) => w.id !== workflowId);
     set({ workflows });
-    const next = workflows[0];
-    if (next) await get().selectWorkflow(next.id);
-    else set({ activeWorkflowId: null, nodes: [], edges: [] });
-  },
+    refreshWorkflowCount();
+    if (get().activeWorkflowId !== workflowId) return;
+    clearWorkflow();
+    if (workflows[0]) await loadWorkflow(workflows[0].id);
+  }),
 
-  renameWorkflow: (name) => set({ workflowName: name }),
+  renameWorkflow: (workflowId, name) => manage(async () => {
+    const { workflow } = await api.renameWorkflow(workflowId, nameOf(name));
+    set((state) => ({
+      workflows: state.workflows.map((w) => w.id === workflowId ? { ...w, name: workflow.name, updatedAt: workflow.updatedAt } : w),
+      ...(state.activeWorkflowId === workflowId ? { workflowName: workflow.name } : {}),
+    }));
+  }),
 
-  save: async () => {
-    const { activeWorkflowId, nodes, edges, workflowName, graphSignature: signature } = get();
+  save: (strict = false) => {
+    const operation = saveQueue.then(async () => {
+    const { activeWorkflowId, nodes, edges, graphSignature: signature } = get();
     if (!activeWorkflowId) return;
     // 内容没变就不发请求：轮询、状态刷新都不应该产生一次 PUT
-    if (signature === lastSavedSignature.get(activeWorkflowId) && workflowName === lastSavedName.get(activeWorkflowId)) {
+    if (signature === lastSavedSignature.get(activeWorkflowId)) {
       return;
     }
     set({ saving: true });
@@ -580,15 +628,21 @@ export const useGraph = create<GraphState>((rawSet, get) => {
           targetHandle: e.targetHandle ?? 'in',
         })),
       };
-      const { workflow } = await api.saveWorkflow(activeWorkflowId, graph, workflowName);
+      const { workflow } = await api.saveWorkflow(activeWorkflowId, graph);
       lastSavedSignature.set(activeWorkflowId, signature);
-      lastSavedName.set(activeWorkflowId, workflowName);
-      set({ savedAt: workflow.updatedAt * 1000, loadError: null });
+      set((state) => ({
+        workflows: state.workflows.map((w) => w.id === activeWorkflowId ? { ...w, graph, updatedAt: workflow.updatedAt } : w),
+        ...(state.activeWorkflowId === activeWorkflowId ? { savedAt: workflow.updatedAt * 1000, loadError: null } : {}),
+      }));
     } catch (error) {
       set({ loadError: (error as Error).message });
+      if (strict) throw error;
     } finally {
       set({ saving: false });
     }
+    });
+    saveQueue = operation.catch(() => undefined);
+    return operation;
   },
 
   reload: async () => {
@@ -666,7 +720,7 @@ export const useGraph = create<GraphState>((rawSet, get) => {
           sourceHandle: template.fromHandle,
           target,
           targetHandle: template.toHandle,
-          type: 'smoothstep',
+          type: 'default',
         } as CanvasEdge;
       })
       .filter((e): e is CanvasEdge => e !== null);

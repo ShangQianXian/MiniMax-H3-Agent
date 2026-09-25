@@ -178,17 +178,17 @@ export function TopBar() {
   );
 
   return (
-    <header className="relative flex h-9 shrink-0 items-center gap-1 border-b border-ink-700/70 bg-ink-900 px-2">
-      <span className="px-1.5 text-[12px] text-mist-300">MiniMax Design</span>
+    <header className="workspace-topbar relative flex shrink-0 items-center gap-1 border-b border-ink-700/70 bg-ink-900 px-2">
+      <span className="px-1.5 text-[12px] text-mist-300">MiniMax H3</span>
       {menuButton('file', '文件')}
       {menuButton('window', '窗口')}
       {menuButton('help', '帮助')}
 
-      <div className="ml-3 flex items-center gap-1.5 text-[12px]">
+      <div className="workspace-breadcrumb ml-3 flex items-center gap-1.5 text-[12px]">
         <select
           className="!border-0 !bg-transparent !p-0 !text-[12px] !text-mist-300 outline-none"
           value={activeProjectId ?? ''}
-          onChange={(event) => void selectProject(event.target.value)}
+          onChange={(event) => void selectProject(event.target.value).catch((cause: Error) => notify(cause.message))}
           title="切换项目"
         >
           {projects.map((project) => (
@@ -201,7 +201,7 @@ export function TopBar() {
         <select
           className="!border-0 !bg-transparent !p-0 !text-[12px] !text-mist-300 outline-none"
           value={activeWorkflowId ?? ''}
-          onChange={(event) => void selectWorkflow(event.target.value)}
+          onChange={(event) => void selectWorkflow(event.target.value).catch((cause: Error) => notify(cause.message))}
           title="切换工作流"
         >
           {workflows.map((workflow) => (

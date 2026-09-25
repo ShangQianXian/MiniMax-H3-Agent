@@ -58,6 +58,13 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     sourcemap: true,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'flow-vendor': ['react', 'react-dom', '@xyflow/react', 'zustand'],
+          'schema-vendor': ['zod'],
+        },
+      },
+    },
   },
 });
-

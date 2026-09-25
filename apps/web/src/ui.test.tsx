@@ -20,6 +20,7 @@ import { StatusBar } from './layout/StatusBar.tsx';
 import { validateGraph } from './engine/validate.ts';
 import { estimateNode } from './engine/estimate.ts';
 import { resolveNodeSlots } from './engine/resolve.ts';
+import { api, type TaskRecord } from './api/client.ts';
 
 /* ─────────────  mock 掉后端 ───────────── */
 
@@ -192,6 +193,16 @@ describe('渲染冒烟测试', () => {
     });
     expect(screen.getByText('远端')).toBeTruthy();
     expect(screen.getByText(/本地缓存/)).toBeTruthy();
+  });
+
+  it('按最新状态筛选任务，同时保留后台待完成任务', async () => {
+    useGraph.setState({ tasks: [{ id: 'pending-task', status: 'queued', projectId: null } as TaskRecord] });
+    render(createElement(LeftSidebar));
+    fireEvent.click(screen.getByRole('button', { name: '任务中心' }));
+    fireEvent.change(screen.getByLabelText('任务状态筛选'), { target: { value: 'succeeded' } });
+    await waitFor(() => expect(api.listTasks).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'succeeded' })));
+    expect(useGraph.getState().tasks.some((task) => task.id === 'pending-task')).toBe(true);
+    expect(screen.queryByText('#ing-task')).toBeNull();
   });
 
   it('检查器在未选中节点时给出规格速查', () => {

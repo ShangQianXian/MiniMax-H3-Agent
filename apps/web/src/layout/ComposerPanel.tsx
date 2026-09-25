@@ -1,414 +1,192 @@
-/**
- * 创作台 —— 对齐参考图 2 的那块大输入面板。
- *
- * 结构（自上而下）：
- *   素材缩略图条（选中态带描边）+ 虚线「+」添加
- *   提示词输入区（占满高度、无边框）
- *   右下角 字符计数
- *   底部一行：MiniMax H3 │ 全能参考 · 3:4 · 768P · 8s │ ×1 ｜ 有声 ｜ ✳ 费用 ｜ ↑ 发送
- *
- * 它本身不是画布节点：点发送时把草稿落地成画布节点并连线，画布始终是唯一事实来源。
- */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
-  RATIO_META,
-  SOUND_DIRECTIVES,
-  coerceRatio,
-  formatCny,
-  isRatioAllowed,
-  presetById,
-  type H3Model,
-  type Ratio,
-  type Resolution,
-  type SoundMode,
-} from '@h3/shared';
-import {
-  useComposer,
-  composerMode,
-  makeComposerMedia,
-  materializeToCanvas,
-  planMaterialize,
-} from '../store/composer.ts';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { MEDIA_LIMITS, RATIO_META, TEXT_MAX_CHARS, coerceRatio, formatCny, type H3Model } from '@h3/shared';
+import { useComposer, makeComposerMedia, materializeToCanvas, planMaterialize } from '../store/composer.ts';
 import { useGraph } from '../store/graph.ts';
 import { useSettingsPanel } from '../store/settings-panel.ts';
+import { useCanvasBridge } from '../canvas/canvas-bridge.ts';
 import { resolveNodeSlots } from '../engine/resolve.ts';
 import { estimateNode } from '../engine/estimate.ts';
-import { runNodes } from '../engine/run-controls.ts';
-import { api, ApiRequestError } from '../api/client.ts';
-import { classNames, fileToOutcome, formatBytes } from '../lib/media.ts';
-
-const TEXT_LIMIT = 7000;
+import { isBusy, runNodes } from '../engine/run-controls.ts';
+import { api } from '../api/client.ts';
+import { fileToOutcome, formatBytes, willExceedBodyLimit } from '../lib/media.ts';
+import { GenerationControls, type GenerationValues } from './GenerationControls.tsx';
+import { Icon } from './Icon.tsx';
 
 export function ComposerPanel() {
-  const text = useComposer((s) => s.text);
-  const setText = useComposer((s) => s.setText);
-  const media = useComposer((s) => s.media);
-  const addMedia = useComposer((s) => s.addMedia);
-  const removeMedia = useComposer((s) => s.removeMedia);
-  const presetId = useComposer((s) => s.presetId);
-  const model = useComposer((s) => s.model);
-  const resolution = useComposer((s) => s.resolution);
-  const duration = useComposer((s) => s.duration);
-  const ratio = useComposer((s) => s.ratio);
-  const sound = useComposer((s) => s.sound);
-  const setParam = useComposer((s) => s.setParam);
-  const targetNodeId = useComposer((s) => s.targetNodeId);
-  const setTarget = useComposer((s) => s.setTarget);
-  const reset = useComposer((s) => s.reset);
-
+  const draft = useComposer();
+  const { text, media, presetId, model, resolution, duration, ratio, sound, targetNodeId, setText, setParam } = draft;
   const nodes = useGraph((s) => s.nodes);
   const edges = useGraph((s) => s.edges);
   const selectedNodeId = useGraph((s) => s.selectedNodeId);
-
+  const workflowId = useGraph((s) => s.activeWorkflowId);
+  const running = useGraph((s) => s.run.running);
   const [busy, setBusy] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const settingsRef = useRef<HTMLDivElement>(null);
+  const uploadingRef = useRef(false);
+  const submittingRef = useRef(false);
+  const previousWorkflow = useRef(workflowId);
+  const selectionKey = useRef('');
+  const target = nodes.find((n) => n.id === targetNodeId && n.data.kind === 'videoGen');
+  const existingSlots = target ? resolveNodeSlots(target.id, nodes, edges) : null;
+  const textOnly = presetId === '全能参考' && media.length === 0 && !existingSlots?.media.length && !existingSlots?.frames.length;
 
-  /* 画布选中生成节点时，创作台自动跟随并带出它的参数 */
   useEffect(() => {
-    const selected = nodes.find((n) => n.id === selectedNodeId);
-    if (!selected) return;
-    if (
-      selected.data.kind !== 'videoGen' &&
-      selected.data.kind !== 'contextIR' &&
-      selected.data.kind !== 'regenerate'
-    ) {
-      return;
-    }
-    setTarget(selected.id, false);
-    if (selected.data.kind === 'videoGen') useComposer.getState().applyFromNode(selected);
-  }, [nodes, selectedNodeId, setTarget]);
-
-  const mode = composerMode(presetId, media);
-  const preset = presetById(presetId);
-  const targetNode = targetNodeId ? nodes.find((n) => n.id === targetNodeId) : null;
-
-  /* 预估费用：有目标节点时按真实上游解析，否则按创作台参数粗算 */
-  const estimate = useMemo(() => {
-    if (targetNode && targetNode.data.kind === 'videoGen') {
-      return estimateNode(targetNode, resolveNodeSlots(targetNode.id, nodes, edges));
-    }
-    return estimateNode(
-      {
-        id: '__draft__',
-        type: 'videoGen',
-        position: { x: 0, y: 0 },
-        data: {
-          kind: 'videoGen',
-          label: '视频生成',
-          params: { model, resolution, duration, ratio, aigcWatermark: false, presetId, sound },
-        },
-      },
-      {
-        text: text.trim() ? { text } : null,
-        frames: [],
-        media: media.map((m) => ({
-          ref: {
-            id: m.id,
-            kind: m.kind,
-            source: 'remote' as const,
-            url: m.url,
-            mime: m.mime ?? '',
-            ...(m.durationSec !== undefined ? { durationSec: m.durationSec } : {}),
-          },
-        })),
-        upstreamNodeIds: [],
-        upstreamVideoUrl: null,
-        upstreamTaskId: null,
-        upstreamTaskStatus: null,
-        warnings: [],
-      },
-    );
-  }, [duration, edges, media, model, nodes, presetId, ratio, resolution, sound, targetNode, text]);
-
-  const canSend = text.trim().length > 0 || media.length > 0;
-
-  const handleFiles = useCallback(
-    async (files: FileList | File[]) => {
-      setBusy(true);
+    if (previousWorkflow.current !== workflowId) {
+      useComposer.getState().setTarget(null, false);
+      useComposer.getState().reset();
+      selectionKey.current = '';
       setError(null);
-      try {
-        const projectId = useGraph.getState().activeProjectId;
-        const created = [];
-        for (const file of Array.from(files)) {
-          const kind: 'image' | 'video' | 'audio' = file.type.startsWith('video')
-            ? 'video'
-            : file.type.startsWith('audio')
-              ? 'audio'
-              : 'image';
-          const uploaded = await api.uploadAsset({ file, kind, projectId });
-          const outcome = await fileToOutcome(file, kind);
-          created.push(
-            makeComposerMedia({
-              kind,
-              url: outcome.url,
-              assetId: uploaded.asset.id,
-              mime: outcome.mime,
-              bytes: outcome.bytes,
-              name: outcome.name,
-              ...(outcome.probe.width !== undefined ? { width: outcome.probe.width } : {}),
-              ...(outcome.probe.height !== undefined ? { height: outcome.probe.height } : {}),
-              ...(outcome.probe.durationSec !== undefined ? { durationSec: outcome.probe.durationSec } : {}),
-            }),
-          );
-          if (outcome.warning) setNotice(outcome.warning);
-        }
-        addMedia(created);
-      } catch (cause) {
-        setError(cause instanceof ApiRequestError ? cause.message : (cause as Error).message);
-      } finally {
-        setBusy(false);
-      }
-    },
-    [addMedia],
-  );
+      setNotice(null);
+      previousWorkflow.current = workflowId;
+    }
+  }, [workflowId]);
 
-  const materialize = useCallback(
-    (run: boolean) => {
-      const plan = planMaterialize({
-        draft: { text, media, presetId, model, resolution, duration, ratio, aigcWatermark: false, sound },
-        targetNodeId,
-        anchor: { x: 80, y: 80 },
-      });
-      const finalTargetId = materializeToCanvas(plan);
-      setTarget(finalTargetId, true);
-      reset();
-      setNotice(run ? '已落地到画布并开始执行。' : '已落地到画布。');
-      if (run) {
-        void runNodes([finalTargetId]).then((result) => {
-          if (result.summary) setError(result.summary);
-          else if (result.failed.length > 0) setError(result.failed[0]!.message);
-        });
-      }
-      setTimeout(() => setNotice(null), 3200);
-    },
-    [duration, media, model, presetId, ratio, reset, resolution, setTarget, sound, text, targetNodeId],
-  );
+  // Runtime polling must not overwrite edits to the draft parameters.
+  useEffect(() => {
+    if (targetNodeId && !nodes.some((n) => n.id === targetNodeId)) draft.setTarget(null, false);
+    const selected = nodes.find((n) => n.id === selectedNodeId && n.data.kind === 'videoGen');
+    if (!selected) { selectionKey.current = ''; return; }
+    const key = `${selected.id}:${JSON.stringify(selected.data.params)}`;
+    if (key === selectionKey.current) return;
+    selectionKey.current = key;
+    draft.setTarget(selected.id, false);
+    draft.applyFromNode(selected);
+  }, [nodes, selectedNodeId, targetNodeId]);
 
-  /* 比例只在当前生成方式允许时出现：图生视频只剩「自适应」 */
-  const ratioOptions = (Object.keys(RATIO_META) as Ratio[]).filter((key) => isRatioAllowed(presetId, key));
+  useEffect(() => {
+    if (!settingsOpen) return;
+    const onPointer = (event: PointerEvent) => {
+      if (!settingsRef.current?.contains(event.target as Node) && !(event.target as HTMLElement).closest('[data-generation-trigger]')) setSettingsOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') setSettingsOpen(false); };
+    document.addEventListener('pointerdown', onPointer);
+    document.addEventListener('keydown', onKey);
+    return () => { document.removeEventListener('pointerdown', onPointer); document.removeEventListener('keydown', onKey); };
+  }, [settingsOpen]);
+
+  const estimate = useMemo(() => {
+    const slots = target ? resolveNodeSlots(target.id, nodes, edges) : {
+      text: null, frames: [], media: [], upstreamNodeIds: [], upstreamVideoUrl: null,
+      upstreamTaskId: null, upstreamTaskStatus: null, warnings: [],
+    };
+    return estimateNode({ id: '__draft__', type: 'videoGen', position: { x: 0, y: 0 },
+      data: { kind: 'videoGen', label: '视频生成', params: { model, resolution, duration, ratio, presetId, sound } },
+    }, { ...slots, media: [...slots.media, ...media.map((m) => ({ ref: {
+      id: m.id, kind: m.kind, source: 'remote' as const, url: m.url, mime: m.mime ?? '',
+      ...(m.durationSec !== undefined ? { durationSec: m.durationSec } : {}),
+    } }))] });
+  }, [target, nodes, edges, media, model, resolution, duration, ratio, presetId, sound]);
+  const canSend = (text.trim().length > 0 || media.length > 0) && text.length <= TEXT_MAX_CHARS && !busy && !submitting && !running;
+
+  const handleFiles = async (files: File[]) => {
+    if (uploadingRef.current || submittingRef.current) return;
+    uploadingRef.current = true;
+    setBusy(true);
+    setError(null);
+    const projectId = useGraph.getState().activeProjectId;
+    const originWorkflow = useGraph.getState().activeWorkflowId;
+    try {
+      for (const file of files) {
+        const kind = file.type.startsWith('video/') ? 'video' : file.type.startsWith('audio/') ? 'audio' : 'image';
+        const limits = MEDIA_LIMITS[kind];
+        if (!(limits.mimeTypes as readonly string[]).includes(file.type)) throw new Error(`不支持「${file.name}」的格式，请使用 JPG、PNG、WebP、HEIC、MP4、MOV、WAV 或 MP3。`);
+        if (file.size > limits.maxBytes || willExceedBodyLimit(file.size)) throw new Error(`「${file.name}」过大，请先压缩或裁剪后再上传。`);
+        const outcome = await fileToOutcome(file, kind);
+        const uploaded = await api.uploadAsset({ file, kind, projectId });
+        if (useGraph.getState().activeWorkflowId !== originWorkflow) return;
+        draft.addMedia([makeComposerMedia({ kind, url: outcome.url, assetId: uploaded.asset.id,
+          mime: outcome.mime, bytes: outcome.bytes, name: outcome.name, ...outcome.probe })]);
+        if (outcome.warning) setNotice(outcome.warning);
+      }
+    } catch (cause) { setError((cause as Error).message); }
+    finally { uploadingRef.current = false; setBusy(false); }
+  };
+
+  const submit = async () => {
+    if (!canSend || submittingRef.current || uploadingRef.current || isBusy()) return;
+    submittingRef.current = true;
+    setSubmitting(true);
+    setSettingsOpen(false);
+    setError(null);
+    setNotice(null);
+    try {
+      const bridge = useCanvasBridge.getState();
+      const anchor = bridge.rect && bridge.toFlowPosition ? bridge.toFlowPosition({
+        x: bridge.rect.left + Math.max(40, (bridge.rect.width - 700) / 2), y: bridge.rect.top + 100,
+      }) : { x: 80, y: 80 };
+      if (!target && nodes.length > 0) {
+        anchor.x = Math.max(anchor.x, ...nodes.map((node) => node.position.x + (node.measured?.width ?? 284))) + 120;
+      }
+      const sendDraft = textOnly ? { ...draft, presetId: '文生视频', ratio: coerceRatio('文生视频', ratio) } : draft;
+      const targetId = materializeToCanvas(planMaterialize({ draft: sendDraft, targetNodeId: target?.id ?? null, anchor }));
+      bridge.fitBoundsOf?.(targetId);
+      draft.setTarget(targetId, true);
+      draft.reset();
+      const result = await runNodes([targetId]);
+      if (result.summary || result.failed.length) setError(result.summary || result.failed[0]!.message);
+      else setNotice(result.ok && result.createdTaskIds?.length ? '生成任务已完成，可在画布查看结果。' : '已保留到画布，可在节点上继续生成。');
+    } catch (cause) { setError((cause as Error).message); }
+    finally { submittingRef.current = false; setSubmitting(false); }
+  };
+
+  const change = ({ presetId: nextPreset, ...patch }: Partial<GenerationValues>) => {
+    if (nextPreset) draft.setPreset(nextPreset);
+    setParam(patch);
+  };
 
   return (
-    <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex justify-center px-4 pb-16">
-      <div
-        onDragOver={(event) => {
-          event.preventDefault();
-          setDragging(true);
-        }}
-        onDragLeave={() => setDragging(false)}
-        onDrop={(event) => {
-          event.preventDefault();
-          setDragging(false);
-          if (event.dataTransfer.files.length > 0) void handleFiles(event.dataTransfer.files);
-        }}
-        className={classNames(
-          'pointer-events-auto flex h-[324px] w-full max-w-[900px] flex-col rounded-2xl border bg-ink-900/95 p-3 shadow-2xl backdrop-blur',
-          dragging ? 'border-accent-500' : 'border-ink-600',
-        )}
-      >
-        {/* 素材缩略图条 */}
-        <div className="flex shrink-0 items-start gap-2">
-          {media.map((item) => (
-            <div
-              key={item.id}
-              className="group relative h-[62px] w-[62px] shrink-0 overflow-hidden rounded-xl border border-mist-200/60 bg-ink-800"
-              title={`${item.name ?? item.kind}${item.bytes ? ` · ${formatBytes(item.bytes)}` : ''}`}
-            >
-              {item.kind === 'image' && (
-                <img src={item.url} alt={item.name ?? ''} className="h-full w-full object-cover" />
-              )}
-              {item.kind === 'video' && <video src={item.url} className="h-full w-full bg-black object-cover" muted />}
-              {item.kind === 'audio' && (
-                <span className="grid h-full w-full place-items-center text-[18px] text-amber-300">♪</span>
-              )}
-              <button
-                type="button"
-                className="absolute right-0 top-0 hidden h-4 w-4 place-items-center rounded-bl-md bg-black/75 text-[10px] text-mist-100 group-hover:grid"
-                onClick={() => removeMedia(item.id)}
-                title="移除"
-              >
-                ×
-              </button>
-            </div>
-          ))}
-          <button
-            type="button"
-            className="grid h-[62px] w-[62px] shrink-0 place-items-center rounded-xl border border-dashed border-ink-500 text-[22px] text-mist-400 transition-colors hover:border-mist-300 hover:text-mist-100"
-            onClick={() => fileRef.current?.click()}
-            title="添加参考图 / 视频 / 音频"
-            disabled={busy}
-          >
-            ＋
-          </button>
+    <div className="composer-positioner">
+      {settingsOpen && <div ref={settingsRef} className="composer-settings" role="dialog" aria-label="生成参数">
+        <div className="settings-heading"><span>生成参数</span><button type="button" className="icon-button" onClick={() => setSettingsOpen(false)} aria-label="关闭生成参数"><Icon name="close" /></button></div>
+        <GenerationControls value={draft} onChange={change} />
+      </div>}
+      <div ref={panelRef} className={`composer-panel ${expanded ? 'is-expanded' : ''} ${dragging ? 'is-dragging' : ''}`} aria-label="视频创作台"
+        onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+        onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragging(false); }}
+        onDrop={(e) => { e.preventDefault(); setDragging(false); void handleFiles(Array.from(e.dataTransfer.files)); }}>
+        <div className="composer-header">
+          <span className="composer-eyebrow">{target ? '继续创作' : '视频创作'}</span>
+          {target && <button type="button" className="target-chip" onClick={() => { draft.setTarget(null, false); useGraph.getState().setSelectedNode(null); }}>已关联 · {target.data.label} <Icon name="close" size={12} /></button>}
+          <button type="button" className="guide-link" onClick={() => useSettingsPanel.getState().openGuide()}>H3 创作指南 ↗</button>
+          <button type="button" className="icon-button" title={expanded ? '收起输入区' : '展开输入区'} aria-label={expanded ? '收起输入区' : '展开输入区'} onClick={() => setExpanded(!expanded)}><Icon name="expand" size={19} /></button>
         </div>
-
-        {/* 提示词 */}
-        <textarea
-          className="mt-3 min-h-0 flex-1 resize-none bg-transparent text-[14px] leading-relaxed text-mist-100 outline-none placeholder:text-mist-400"
-          placeholder="描述你要生成的内容或探索H3创作指南 ↗"
-          value={text}
-          onChange={(event) => setText(event.target.value)}
-          onKeyDown={(event) => {
-            event.stopPropagation();
-            if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
-              event.preventDefault();
-              if (canSend) materialize(true);
-            }
-          }}
-        />
-
-        {/* 右下角字符计数 */}
-        <div className="flex shrink-0 items-center justify-end gap-1 text-[11px] text-mist-400">
-          <span className="text-mist-500">T</span>
-          <span className={classNames(text.length > TEXT_LIMIT && 'text-rose-400')}>
-            {text.length} / {TEXT_LIMIT}
-          </span>
+        <div className="composer-media">
+          {media.map((item, index) => <div key={item.id} className="media-thumbnail" title={`${item.name ?? item.kind} · ${formatBytes(item.bytes)}`}>
+            {item.kind === 'image' && <img src={item.url} alt={item.name ?? '参考图片'} />}
+            {item.kind === 'video' && <video src={item.url} muted preload="metadata" />}
+            {item.kind === 'audio' && <Icon name="wave" size={28} />}
+            <span className="media-role">{presetId === '首尾帧' && item.kind === 'image' ? (index === 0 ? '首帧' : '尾帧') : `参考 ${index + 1}`}</span>
+            <button type="button" className="media-remove" aria-label={`移除 ${item.name ?? '素材'}`} onClick={() => draft.removeMedia(item.id)}><Icon name="close" size={12} /></button>
+          </div>)}
+          <button type="button" className="media-add" onClick={() => fileRef.current?.click()} disabled={busy || submitting} title="添加参考图 / 视频 / 音频" aria-label="添加参考素材"><Icon name="plus" size={24} />{media.length === 0 && <span>{busy ? '上传中…' : '添加素材'}</span>}</button>
+          {media.length === 0 && <div className="media-help">让画面从一个想法开始<span>{textOnly && text.trim() ? `仅文本将生成 ${coerceRatio('文生视频', ratio)} 视频；添加素材可启用参考` : '上传参考素材，或直接写下你的创意'}</span></div>}
         </div>
-
-        {/* 底部一行 */}
-        <div className="mt-2 flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-ink-700/70 pt-2.5 text-[12px] text-mist-200">
-          <select
-            className="!border-0 !bg-transparent !p-0 !text-[12px] !text-mist-200 outline-none"
-            value={model}
-            onChange={(event) => setParam({ model: event.target.value as H3Model })}
-            title="模型"
-          >
-            <option value="MiniMax-H3">MiniMax H3</option>
-            <option value="MiniMax-H3-Max">MiniMax H3 Max</option>
-          </select>
-
-          <span className="text-mist-500">│</span>
-
-          <button
-            type="button"
-            className="text-[12px] text-mist-200 hover:text-white"
-            onClick={() => {
-              if (targetNodeId) useSettingsPanel.getState().open(targetNodeId);
-              else setNotice('先在画布上点一下视频节点，或直接发送以新建一个');
-            }}
-            title="生成方式：在节点上弹出完整设置面板"
-          >
-            {preset?.label ?? '全能参考'}
+        <textarea className="composer-prompt" aria-label="视频提示词" placeholder="描述你想生成的画面、动作和镜头语言…"
+          value={text} onChange={(e) => { setText(e.target.value); setError(null); }}
+          onKeyDown={(e) => { e.stopPropagation(); if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.nativeEvent.isComposing) { e.preventDefault(); void submit(); } }} />
+        <div className="composer-counter"><span>Ctrl + Enter 生成</span><span className={text.length > TEXT_MAX_CHARS ? 'text-rose-400' : ''}>T <i /> {text.length.toLocaleString()} / 7,000</span></div>
+        <div className="composer-footer">
+          <div className="composer-model"><Icon name="wave" /><select value={model} aria-label="模型" onChange={(e) => setParam({ model: e.target.value as H3Model })}><option value="MiniMax-H3">MiniMax H3</option><option value="MiniMax-H3-Max">MiniMax H3 Max</option></select></div>
+          <span className="toolbar-divider" />
+          <button type="button" className="parameter-summary" data-generation-trigger aria-expanded={settingsOpen} aria-label="设置生成参数" onClick={() => { useSettingsPanel.getState().close(); setSettingsOpen(!settingsOpen); }}>
+            {presetId}<span>·</span>{RATIO_META[ratio]?.label}<span>·</span>{resolution}<span>·</span>{duration}s<Icon name="chevron" size={14} />
           </button>
-
-          <span className="text-mist-500">·</span>
-
-          <select
-            className="!border-0 !bg-transparent !p-0 !text-[12px] !text-mist-200 outline-none disabled:opacity-50"
-            value={ratio}
-            disabled={ratioOptions.length <= 1}
-            onChange={(event) => setParam({ ratio: coerceRatio(presetId, event.target.value as Ratio) })}
-            title={ratioOptions.length <= 1 ? '图生视频的宽高比由输入图片决定，只能是「自适应」' : '宽高比'}
-          >
-            {ratioOptions.map((key) => (
-              <option key={key} value={key}>
-                {RATIO_META[key].label}
-              </option>
-            ))}
-          </select>
-
-          <span className="text-mist-500">·</span>
-
-          <select
-            className="!border-0 !bg-transparent !p-0 !text-[12px] !text-mist-200 outline-none"
-            value={resolution}
-            onChange={(event) => setParam({ resolution: event.target.value as Resolution })}
-            title="清晰度"
-          >
-            <option value="768P">768P</option>
-            <option value="2K" disabled={model === 'MiniMax-H3-Max'}>
-              2K
-            </option>
-            <option value="480P" disabled={model === 'MiniMax-H3'}>
-              480P
-            </option>
-          </select>
-
-          <span className="text-mist-500">·</span>
-
-          <select
-            className="!border-0 !bg-transparent !p-0 !text-[12px] !text-mist-200 outline-none"
-            value={duration}
-            onChange={(event) => setParam({ duration: Number(event.target.value) })}
-            title="时长"
-          >
-            {Array.from({ length: 12 }, (_, i) => i + 4).map((value) => (
-              <option key={value} value={value} disabled={model === 'MiniMax-H3-Max' && value === 4}>
-                {value}s
-              </option>
-            ))}
-          </select>
-
-          <span className="text-mist-500">│</span>
-
-          <span className="text-mist-400">× {Math.max(1, media.length)}</span>
-
-          <button
-            type="button"
-            className="ml-auto text-[12px] text-mist-300 hover:text-white"
-            onClick={() => setParam({ sound: (sound === '有声' ? '无声' : '有声') as SoundMode })}
-            title={SOUND_DIRECTIVES[sound].hint}
-          >
-            {sound}
-          </button>
-
-          <span
-            className="flex items-center gap-1 text-[12px] text-mist-200"
-            title={
-              estimate.kind === 'none'
-                ? '当前参数无需计费'
-                : estimate.breakdown.items.map((i) => `${i.label} ${formatCny(i.amount)}`).join(' · ')
-            }
-          >
-            <span className="text-mist-400">✳</span>
-            {formatCny(estimate.breakdown.total)}
-          </span>
-
-          <button
-            type="button"
-            className="grid h-8 w-8 place-items-center rounded-full border border-ink-600 text-[13px] text-mist-200 transition-colors hover:bg-ink-700 disabled:opacity-35"
-            disabled={!canSend}
-            onClick={() => materialize(true)}
-            title="落地到画布并立即执行（Ctrl+Enter）"
-          >
-            ↑
-          </button>
+          <span className="output-count" title="单次生成 1 个视频">× 1</span>
+          <div className="composer-submit-group"><span className="composer-cost" title={estimate.breakdown.items.map((i) => `${i.label} ${formatCny(i.amount)}`).join(' · ')}><Icon name="spark" size={16} /><span><small>预估</small>{formatCny(estimate.breakdown.total)}</span></span>
+            <button type="button" className="send-button" disabled={!canSend} onClick={() => void submit()} aria-label="生成视频" title="生成视频（Ctrl+Enter）">{busy || submitting ? <span className="loading-ring" /> : <Icon name="arrow" size={22} />}</button>
+          </div>
         </div>
-
-        {(error || notice) && (
-          <p
-            className={classNames(
-              'mt-1.5 shrink-0 rounded-md border p-1.5 text-[11px] leading-snug',
-              error
-                ? 'border-rose-500/40 bg-rose-500/5 text-rose-300'
-                : 'border-emerald-500/40 bg-emerald-500/5 text-emerald-300',
-            )}
-          >
-            {error ?? notice}
-          </p>
-        )}
-
-        {mode === 'r2va' && preset && preset.mode !== 'r2va' && (
-          <p className="mt-1 shrink-0 text-[10px] text-amber-300">
-            检测到参考视频 / 音频，会按多模态参考（r2va）发送。
-          </p>
-        )}
+        {(error || notice || text.length > TEXT_MAX_CHARS) && <div className={`composer-message ${error || text.length > TEXT_MAX_CHARS ? 'is-error' : ''}`} role={error ? 'alert' : 'status'}>{error ?? (text.length > TEXT_MAX_CHARS ? '提示词超过 7,000 字符，请精简后生成。' : notice)}<button type="button" aria-label="关闭提示" onClick={() => { setError(null); setNotice(null); }}><Icon name="close" size={14} /></button></div>}
       </div>
-
-      <input
-        ref={fileRef}
-        type="file"
-        multiple
-        accept="image/*,video/mp4,video/quicktime,audio/wav,audio/mpeg"
-        className="hidden"
-        onChange={(event) => {
-          const files = event.target.files;
-          if (files && files.length > 0) void handleFiles(files);
-          event.target.value = '';
-        }}
-      />
+      <input ref={fileRef} type="file" multiple accept="image/jpeg,image/png,image/webp,image/heic,image/heif,video/mp4,video/quicktime,audio/wav,audio/mpeg" className="hidden" onChange={(e) => { const files = Array.from(e.target.files ?? []); e.target.value = ''; if (files.length) void handleFiles(files); }} />
     </div>
   );
 }

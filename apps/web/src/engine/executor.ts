@@ -388,7 +388,7 @@ export async function executeNodes(
               ? '这会创建 H3-Context-IR 任务，只产出增强提示词，不会生成视频。'
               : taskType === 'regeneration'
                 ? '这会创建视频再生成任务，把 768P 源视频再生成为 2K。'
-                : '这会创建真实的视频生成任务并产生费用。',
+                : '这会使用当前模型与素材创建视频生成任务。',
           estimateText: estimateText(current),
         });
         if (!approved) {

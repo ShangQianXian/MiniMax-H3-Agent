@@ -264,6 +264,10 @@ export const api = {
       body: JSON.stringify({ graph, name }),
     }),
   deleteWorkflow: (id: string) => request<{ ok: true }>(`/workflows/${id}`, { method: 'DELETE' }),
+  renameWorkflow: (id: string, name: string) =>
+    request<{ workflow: WorkflowRecord }>(`/workflows/${encodeURIComponent(id)}`, {
+      method: 'PATCH', body: JSON.stringify({ name }),
+    }),
   importWorkflow: (input: { projectId: string; name: string; graph: WorkflowGraph }) =>
     request<{ workflow: WorkflowRecord }>('/workflows/import', {
       method: 'POST',

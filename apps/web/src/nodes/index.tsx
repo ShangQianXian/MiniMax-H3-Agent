@@ -172,7 +172,7 @@ function MediaNode({ id, data, selected }: NodeProps<CanvasNode>) {
   const oversize = bytes !== undefined && bytes > limitBytes;
 
   return (
-    <NodeShell id={id} type={data.kind} data={data} selected={selected} width={kind === 'audio' ? 240 : 208}>
+    <NodeShell id={id} type={data.kind} data={data} selected={selected} width={kind === 'audio' ? 240 : 260}>
       {url.length === 0 ? (
         <div
           onDragOver={(event) => event.preventDefault()}
@@ -193,7 +193,7 @@ function MediaNode({ id, data, selected }: NodeProps<CanvasNode>) {
             <img
               src={displayUrl}
               alt={name}
-              className="h-[120px] w-full rounded-lg bg-ink-850 object-cover"
+              className="h-[160px] w-full rounded-lg bg-ink-850 object-contain"
               draggable={false}
             />
           )}
@@ -346,6 +346,7 @@ export const VideoGenNode = memo(function VideoGenNode({ id, data, selected }: N
   const openPanel = useCallback(
     (event: React.MouseEvent) => {
       event.stopPropagation();
+      useGraph.getState().setSelectedNode(id);
       const store = useSettingsPanel.getState();
       if (store.nodeId === id) store.close();
       else store.open(id);
@@ -360,8 +361,8 @@ export const VideoGenNode = memo(function VideoGenNode({ id, data, selected }: N
         type={data.kind}
         data={data}
         selected={selected}
-        width={244}
-        title={preset?.label ?? '视频'}
+        width={284}
+        title="视频"
         active={isActive}
         onRun={() => void runNodes([id])}
       >
@@ -374,9 +375,9 @@ export const VideoGenNode = memo(function VideoGenNode({ id, data, selected }: N
           title="点击调整参数"
         >
           {runtime?.outputUrl ? (
-            <video src={runtime.outputUrl} className="h-[132px] w-full bg-black object-cover" controls muted playsInline />
+            <video src={runtime.outputUrl} className="h-[156px] w-full bg-black object-contain" controls muted playsInline onClick={(event) => event.stopPropagation()} />
           ) : (
-            <div className="grid h-[132px] w-full place-items-center">
+            <div className="grid h-[156px] w-full place-items-center">
               <span className="grid h-9 w-9 place-items-center rounded-full bg-ink-800 text-[12px] text-mist-200">▶</span>
             </div>
           )}
@@ -384,7 +385,7 @@ export const VideoGenNode = memo(function VideoGenNode({ id, data, selected }: N
 
         {/* 生成方式 + 指南入口：与参考图一致的「尝试 MiniMax H3 / H3创作指南」一行 */}
         <div className="mt-2 flex items-center gap-1.5">
-          <span className="truncate text-[11px] text-mist-300">{preset?.label ?? '生成'}</span>
+          <span className="truncate text-[11px] text-mist-300">尝试 {String(data.params.model ?? 'MiniMax-H3').replaceAll('-', ' ')}</span>
           <button
             type="button"
             className="ml-auto shrink-0 rounded-md border border-ink-600 px-1.5 py-0.5 text-[10px] text-mist-300 hover:bg-ink-800"
@@ -397,17 +398,17 @@ export const VideoGenNode = memo(function VideoGenNode({ id, data, selected }: N
           </button>
         </div>
 
-        <div className="mt-1.5 space-y-0.5 text-[10px] text-mist-400">
-          <div className="flex items-center gap-1.5">
+        <div className="node-generation-actions mt-2 space-y-1 text-[11px] text-mist-300">
+          <button type="button" className="flex w-full items-center gap-2 rounded-lg bg-ink-800 px-2.5 py-2 text-left" onClick={openPanel}>
             <span className="text-mist-500">✕</span>
             <span>{preset?.label ?? '全能参考'}</span>
-          </div>
-          <div className="flex items-center gap-1.5">
+          </button>
+          <button type="button" className="flex w-full items-center gap-2 rounded-lg bg-ink-800 px-2.5 py-2 text-left" onClick={openPanel}>
             <span className="text-mist-500">▤</span>
             <span>
               {resolution} · {duration}s · {RATIO_META[ratio as keyof typeof RATIO_META]?.label ?? ratio} · {sound}
             </span>
-          </div>
+          </button>
         </div>
 
         {(upstream.imageCount === 0 || !upstream.hasText) && (

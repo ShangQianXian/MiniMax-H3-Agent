@@ -476,6 +476,58 @@ describe('费用预估接口', () => {
 });
 
 describe('项目 / 工作流 / Skill 持久化', () => {
+  it('项目与工作流支持创建、独立重命名和删除，重命名不覆盖图数据', async () => {
+    const created = await call<{ project: { id: string; name: string }; workflow: { id: string } }>('/api/projects', {
+      method: 'POST', body: JSON.stringify({ name: '  管理测试项目  ' }),
+    });
+    expect(created.body.project.name).toBe('管理测试项目');
+    const pid = created.body.project.id;
+    const firstId = created.body.workflow.id;
+    const graph = { nodes: [{ id: 'text', kind: 'prompt', position: { x: 1, y: 2 }, params: { text: '保留这段提示词' } }], edges: [] };
+    await call(`/api/workflows/${firstId}`, { method: 'PUT', body: JSON.stringify({ graph }) });
+    const renamed = await call<{ workflow: { name: string; graph: unknown } }>(`/api/workflows/${firstId}`, {
+      method: 'PATCH', body: JSON.stringify({ name: '  开场镜头  ' }),
+    });
+    expect(renamed.status).toBe(200);
+    expect(renamed.body.workflow.name).toBe('开场镜头');
+    expect(renamed.body.workflow.graph).toEqual(graph);
+    // 之后的画布自动保存不携带旧名称，重命名不会被回滚。
+    await call(`/api/workflows/${firstId}`, { method: 'PUT', body: JSON.stringify({ graph }) });
+    const read = await call<{ workflow: { name: string } }>(`/api/workflows/${firstId}`);
+    expect(read.body.workflow.name).toBe('开场镜头');
+    const projectRename = await call<{ project: { name: string } }>(`/api/projects/${pid}`, {
+      method: 'PATCH', body: JSON.stringify({ name: '广告制作' }),
+    });
+    expect(projectRename.body.project.name).toBe('广告制作');
+    const second = await call<{ workflow: { id: string } }>('/api/workflows', {
+      method: 'POST', body: JSON.stringify({ projectId: pid, name: '镜头二' }),
+    });
+    expect((await call(`/api/workflows/${second.body.workflow.id}`, { method: 'DELETE' })).status).toBe(200);
+    expect((await call(`/api/workflows/${second.body.workflow.id}`)).status).toBe(404);
+    expect((await call(`/api/projects/${pid}`, { method: 'DELETE' })).status).toBe(200);
+    expect((await call(`/api/workflows/${firstId}`)).status).toBe(404);
+    const list = await call<{ items: unknown[] }>(`/api/workflows?projectId=${pid}`);
+    expect(list.body.items).toEqual([]);
+    expect((await call('/api/workflows/does-not-exist', { method: 'PATCH', body: JSON.stringify({ name: '新名称' }) })).status).toBe(404);
+  });
+
+  it('项目与工作流名称拒绝空格、超长名称和非字符串', async () => {
+    const created = await call<{ project: { id: string }; workflow: { id: string } }>('/api/projects', {
+      method: 'POST', body: JSON.stringify({ name: '名称校验' }),
+    });
+    for (const name of ['', '   ', 'x'.repeat(81), 123]) {
+      for (const [path, method, extra] of [
+        ['/api/projects', 'POST', {}],
+        [`/api/projects/${created.body.project.id}`, 'PATCH', {}],
+        ['/api/workflows', 'POST', { projectId: created.body.project.id }],
+        [`/api/workflows/${created.body.workflow.id}`, 'PATCH', {}],
+      ] as const) {
+        expect((await call(path, { method, body: JSON.stringify({ name, ...extra }) })).status).toBe(400);
+      }
+    }
+    await call(`/api/projects/${created.body.project.id}`, { method: 'DELETE' });
+  });
+
   it('项目创建后自动带一个工作流，画布可保存并读回', async () => {
     const created = await call<{ project: { id: string }; workflow: { id: string } }>('/api/projects', {
       method: 'POST',

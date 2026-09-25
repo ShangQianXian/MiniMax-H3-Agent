@@ -47,11 +47,13 @@ export function autoLayout(): void {
   for (const [column, list] of [...byColumn.entries()].sort((a, b) => a[0] - b[0])) {
     // 同列内按当前纵坐标排序，保持用户的心理模型
     list.sort((a, b) => a.position.y - b.position.y);
-    list.forEach((node, index) => {
+    let rowY = ORIGIN_Y;
+    list.forEach((node) => {
       positions.set(node.id, {
         x: ORIGIN_X + column * COLUMN_GAP,
-        y: ORIGIN_Y + index * ROW_GAP,
+        y: rowY,
       });
+      rowY += Math.max(ROW_GAP, (node.measured?.height ?? 260) + 56);
     });
   }
 

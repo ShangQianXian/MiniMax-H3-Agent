@@ -168,6 +168,11 @@ export class WorkflowStore {
     return this.get(id);
   }
 
+  rename(id: string, name: string): WorkflowRecord | null {
+    this.db.prepare('UPDATE workflows SET name = ?, updated_at = ? WHERE id = ?').run(name, nowSeconds(), id);
+    return this.get(id);
+  }
+
   delete(id: string): void {
     this.db.prepare('DELETE FROM workflows WHERE id = ?').run(id);
   }

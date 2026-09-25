@@ -6,6 +6,14 @@ import { zWorkflowGraph } from '@h3/shared';
 import type { AppContext } from '../context.ts';
 import { param, queryString } from '../http.ts';
 
+function validName(value: unknown, label: string, res: Response): value is string {
+  if (typeof value !== 'string' || !value.trim() || value.trim().length > 80) {
+    res.status(400).json({ error: `${label}名称需为 1–80 个字符，不能只包含空格。` });
+    return false;
+  }
+  return true;
+}
+
 export function createProjectRouter(ctx: AppContext): Router {
   const router = Router();
 
@@ -20,11 +28,8 @@ export function createProjectRouter(ctx: AppContext): Router {
   });
 
   router.post('/', (req: Request, res: Response) => {
-    const name = String(req.body?.name ?? '').trim();
-    if (name.length === 0) {
-      res.status(400).json({ error: '项目名称不能为空。' });
-      return;
-    }
+    if (!validName(req.body?.name, '项目', res)) return;
+    const name = req.body.name.trim();
     const project = ctx.projects.create({
       name,
       description: String(req.body?.description ?? ''),
@@ -34,8 +39,9 @@ export function createProjectRouter(ctx: AppContext): Router {
   });
 
   router.patch('/:id', (req: Request, res: Response) => {
+    if (req.body?.name !== undefined && !validName(req.body.name, '项目', res)) return;
     const updated = ctx.projects.update(param(req, 'id'), {
-      ...(typeof req.body?.name === 'string' ? { name: req.body.name } : {}),
+      ...(typeof req.body?.name === 'string' ? { name: req.body.name.trim() } : {}),
       ...(typeof req.body?.description === 'string' ? { description: req.body.description } : {}),
       ...(typeof req.body?.cover === 'string' ? { cover: req.body.cover } : {}),
     });
@@ -77,6 +83,8 @@ export function createWorkflowRouter(ctx: AppContext): Router {
   });
 
   router.post('/', (req: Request, res: Response) => {
+    const name = req.body?.name ?? '未命名工作流';
+    if (!validName(name, '工作流', res)) return;
     const projectId = String(req.body?.projectId ?? '');
     if (!ctx.projects.get(projectId)) {
       res.status(400).json({ error: '项目不存在，无法创建工作流。' });
@@ -84,13 +92,24 @@ export function createWorkflowRouter(ctx: AppContext): Router {
     }
     const workflow = ctx.workflows.create({
       projectId,
-      name: String(req.body?.name ?? '未命名工作流'),
+      name: name.trim(),
     });
     res.json({ workflow });
   });
 
-  /** 保存画布。前端 800ms 防抖后调用，因此这里必须是幂等覆盖写入。 */
+  router.patch('/:id', (req: Request, res: Response) => {
+    if (!validName(req.body?.name, '工作流', res)) return;
+    const workflow = ctx.workflows.rename(param(req, 'id'), req.body.name.trim());
+    if (!workflow) {
+      res.status(404).json({ error: '工作流不存在。' });
+      return;
+    }
+    res.json({ workflow });
+  });
+
+  /** 保存画布。前端 900ms 防抖后调用，因此这里必须是幂等覆盖写入。 */
   router.put('/:id', (req: Request, res: Response) => {
+    if (req.body?.name !== undefined && !validName(req.body.name, '工作流', res)) return;
     const id = param(req, 'id');
     const parsed = zWorkflowGraph.safeParse(req.body?.graph);
     if (!parsed.success) {
@@ -107,7 +126,7 @@ export function createWorkflowRouter(ctx: AppContext): Router {
     const saved = ctx.workflows.saveGraph(
       id,
       parsed.data,
-      typeof req.body?.name === 'string' ? req.body.name : undefined,
+      typeof req.body?.name === 'string' ? req.body.name.trim() : undefined,
     );
     if (!saved) {
       res.status(404).json({ error: '工作流不存在。' });
@@ -128,6 +147,8 @@ export function createWorkflowRouter(ctx: AppContext): Router {
 
   /** 导入：把外部 JSON 直接建成新的工作流。 */
   router.post('/import', (req: Request, res: Response) => {
+    const name = req.body?.name ?? '导入的工作流';
+    if (!validName(name, '工作流', res)) return;
     const projectId = String(req.body?.projectId ?? '');
     if (!ctx.projects.get(projectId)) {
       res.status(400).json({ error: '项目不存在。' });
@@ -140,7 +161,7 @@ export function createWorkflowRouter(ctx: AppContext): Router {
     }
     const workflow = ctx.workflows.create({
       projectId,
-      name: String(req.body?.name ?? '导入的工作流'),
+      name: name.trim(),
       graph: parsed.data,
     });
     res.json({ workflow });

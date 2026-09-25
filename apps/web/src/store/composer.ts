@@ -8,6 +8,7 @@
 import { create } from 'zustand';
 import {
   PRESETS,
+  MODEL_CAPABILITIES,
   coerceRatio,
   defaultParamsFor,
   modeFromPreset,
@@ -113,6 +114,7 @@ export const useComposer = create<ComposerState>((set, get) => ({
   setPreset: (id) => {
     const preset = presetById(id);
     if (!preset) return;
+    if (!MODEL_CAPABILITIES[get().model].supportsReference && preset.mode === 'r2va') return;
     set((s) => ({
       presetId: preset.id,
       // 比例收敛到该生成方式允许的值，避免留下一个会被接口忽略的比例
@@ -120,7 +122,14 @@ export const useComposer = create<ComposerState>((set, get) => ({
     }));
   },
 
-  setParam: (patch) => set(patch),
+  setParam: (patch) => set((state) => {
+    const next = { ...state, ...patch };
+    const cap = MODEL_CAPABILITIES[next.model];
+    const presetId = !cap.supportsReference && presetById(next.presetId)?.mode === 'r2va' ? '首帧' : next.presetId;
+    return { ...patch, presetId, ratio: coerceRatio(presetId, next.ratio),
+      resolution: cap.resolutions.includes(next.resolution) ? next.resolution : cap.defaultResolution,
+      duration: Math.min(cap.maxDuration, Math.max(cap.minDuration, next.duration)) };
+  }),
 
   setTarget: (nodeId, pinned = true) => set({ targetNodeId: nodeId, targetPinned: pinned }),
 
@@ -140,6 +149,10 @@ export const useComposer = create<ComposerState>((set, get) => ({
       model: s.model,
       resolution: s.resolution,
       duration: s.duration,
+      presetId: s.presetId,
+      ratio: s.ratio,
+      sound: s.sound,
+      aigcWatermark: s.aigcWatermark,
     })),
 
   applyFromNode: (node) => {
@@ -230,7 +243,7 @@ export function planMaterialize(input: {
       node: {
         id: targetTempId,
         type: 'videoGen',
-        position: { x: input.anchor.x + 380, y: input.anchor.y },
+        position: { x: input.anchor.x + (input.draft.media.length > 1 ? 680 : 360), y: input.anchor.y },
         data: { kind: 'videoGen', label: '视频生成', params: targetParams },
       },
     });
@@ -257,7 +270,7 @@ export function planMaterialize(input: {
       node: {
         id: tempId,
         type: 'prompt',
-        position: { x: input.anchor.x, y: input.anchor.y + 120 },
+        position: { x: input.anchor.x, y: input.anchor.y + input.draft.media.length * 260 },
         data: { kind: 'prompt', label: text.slice(0, 18), params: { text } },
       },
     });
@@ -288,7 +301,7 @@ export function planMaterialize(input: {
       node: {
         id: tempId,
         type: item.kind,
-        position: { x: input.anchor.x, y: input.anchor.y + index * 200 },
+        position: { x: input.anchor.x, y: input.anchor.y + index * 260 },
         data: { kind: item.kind, label: item.name ?? item.kind, params },
       },
     });
@@ -300,7 +313,7 @@ export function planMaterialize(input: {
   if (mediaTempIds.length === 1) {
     const tempId = mediaTempIds[0]!;
     edges.push({ source: tempId, sourceHandle: 'out', target: targetTempId, targetHandle: 'frames' });
-    if (role) roleByTempId.set(tempId, role);
+    if (role && input.draft.media[0]?.kind === 'image') roleByTempId.set(tempId, role);
   } else if (mediaTempIds.length > 1) {
     // 多张素材：插一个帧角色节点做角色分配，保持画布语义清晰
     const frameTempId = nextTempId('frameRole');
@@ -310,7 +323,7 @@ export function planMaterialize(input: {
       node: {
         id: frameTempId,
         type: 'frameRole',
-        position: { x: input.anchor.x + 190, y: input.anchor.y },
+        position: { x: input.anchor.x + 340, y: input.anchor.y },
         data: {
           kind: 'frameRole',
           label: '帧角色',
@@ -360,10 +373,11 @@ export function materializeToCanvas(plan: ReturnType<typeof planMaterialize>): s
     sourceHandle: edge.sourceHandle,
     target: resolve(edge.target),
     targetHandle: edge.targetHandle,
-    type: 'smoothstep',
+    type: 'default',
   }));
 
-  store.applyMaterialized(created, newEdges, plan.roleByTempId);
+  const roles = new Map([...plan.roleByTempId].map(([id, role]) => [resolve(id), role]));
+  store.applyMaterialized(created, newEdges, roles);
 
   // 绑定了已有生成节点时，把创作台上调的参数同步进去
   if (plan.targetParamPatch && plan.targetNodeId) {

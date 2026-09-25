@@ -50,12 +50,13 @@ function PortHandles({ nodeId, kind }: { nodeId: string; kind: NodeKind }) {
 
   return (
     <>
-      {def.inputs.map((port) => (
+      {def.inputs.map((port, index) => (
         <Handle
           key={`in-${port.id}`}
           id={port.id}
           type="target"
           position={Position.Left}
+          style={{ top: `${30 + (index + 1) * 55 / (def.inputs.length + 1)}%` }}
           className={classNames(
             PORT_CLASS[port.kind],
             !isConnected(port.id, 'in') && port.required && 'ring-1 ring-rose-400/60',
@@ -63,12 +64,13 @@ function PortHandles({ nodeId, kind }: { nodeId: string; kind: NodeKind }) {
           title={`${port.label}${port.required ? '（必需）' : ''}`}
         />
       ))}
-      {def.outputs.map((port) => (
+      {def.outputs.map((port, index) => (
         <Handle
           key={`out-${port.id}`}
           id={port.id}
           type="source"
           position={Position.Right}
+          style={{ top: `${30 + (index + 1) * 55 / (def.outputs.length + 1)}%` }}
           className={PORT_CLASS[port.kind]}
           title={port.label}
         />

@@ -1,19 +1,19 @@
 /**
  * 左侧栏 —— 对齐参考图 1：
  *
- *   ▣ MiniMax Design            ← 品牌行
+ *   ▣ MiniMax H3                ← 品牌行
  *   ＋ 开始创作                  ← 主行动入口
  *   项目库 / Skill / 节点库 / 任务中心
  *   ─────────
  *   项目  ⌄
  *     项目名
- *       ▣ 工作流条目（带缩略图）
+ *       ▣ 工作流条目及重命名、删除操作
  *   （下方留白）
  *   ⚡ 本地工作区          v0.1   ← 底部账号行
  *
  * 参考图里的「ComfyUI 工作流 Beta」按需求不做，位置由「节点库」占用。
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   NODE_DEFS,
   SKILL_CATEGORY_LABELS,
@@ -23,8 +23,10 @@ import {
 } from '@h3/shared';
 import { useGraph } from '../store/graph.ts';
 import { useSettingsPanel } from '../store/settings-panel.ts';
+import { Icon } from './Icon.tsx';
+import { ProjectTree, ProjectActionDialog, type ProjectAction } from './ProjectManager.tsx';
 import { DRAG_MIME } from '../canvas/FlowCanvas.tsx';
-import { api, ApiRequestError, type AssetRecord } from '../api/client.ts';
+import { api, ApiRequestError } from '../api/client.ts';
 import { classNames, formatTime } from '../lib/media.ts';
 
 type Panel = 'projects' | 'skills' | 'nodes' | 'tasks';
@@ -46,48 +48,29 @@ const GROUP_LABELS: Record<(typeof GROUP_ORDER)[number], string> = {
 
 export function LeftSidebar() {
   const [panel, setPanel] = useState<Panel>('projects');
-  const projects = useGraph((s) => s.projects);
   const activeProjectId = useGraph((s) => s.activeProjectId);
-  const createProject = useGraph((s) => s.createProject);
+  const busy = useGraph((s) => s.workspaceBusy);
   const tasks = useGraph((s) => s.tasks);
   const setComposerOpen = useSettingsPanel((s) => s.setComposerOpen);
-
-  const [projectsOpen, setProjectsOpen] = useState(true);
-  const [creating, setCreating] = useState(false);
-  const [draftName, setDraftName] = useState('');
-  const [error, setError] = useState<string | null>(null);
-
+  const [action, setAction] = useState<ProjectAction | null>(null);
+  const [mobileOpen, setMobileOpen] = useState(false);
   const pendingCount = tasks.filter((t) => t.status === 'queued' || t.status === 'running').length;
 
-  const handleCreate = useCallback(async () => {
-    const name = draftName.trim();
-    if (name.length === 0) return;
-    setError(null);
-    try {
-      await createProject(name);
-      setDraftName('');
-      setCreating(false);
-      setProjectsOpen(true);
-      setPanel('projects');
-    } catch (cause) {
-      setError(cause instanceof ApiRequestError ? cause.message : (cause as Error).message);
-    }
-  }, [createProject, draftName]);
-
-  const navItem = (value: Panel, icon: string) => (
+  const navItem = (value: Panel, icon: 'folder' | 'spark' | 'nodes' | 'tasks') => (
     <button
       key={value}
       type="button"
       onClick={() => {
         setPanel(value);
-        if (value === 'projects') setProjectsOpen(true);
+        if (value === 'projects') setMobileOpen((value) => !value);
       }}
       className={classNames(
         'flex w-full items-center gap-2.5 rounded-lg px-2.5 py-[7px] text-left text-[13px] transition-colors',
         panel === value ? 'bg-ink-800 text-mist-100' : 'text-mist-300 hover:bg-ink-850 hover:text-mist-100',
       )}
+      aria-label={PANEL_TITLE[value]}
     >
-      <span className="w-4 text-center text-[12px] text-mist-400">{icon}</span>
+      <Icon name={icon} size={19} />
       <span>{PANEL_TITLE[value]}</span>
       {value === 'tasks' && pendingCount > 0 && (
         <span className="ml-auto rounded-full bg-blue-500/15 px-1.5 text-[10px] text-blue-300">{pendingCount}</span>
@@ -96,87 +79,39 @@ export function LeftSidebar() {
   );
 
   return (
-    <aside className="flex h-full w-[240px] shrink-0 flex-col border-r border-ink-700/70 bg-ink-900">
+    <aside className={`workspace-sidebar flex h-full shrink-0 flex-col ${mobileOpen ? 'mobile-projects-open' : ''}`}>
       {/* 品牌行 */}
-      <div className="flex h-9 shrink-0 items-center gap-2 px-3">
-        <span className="grid h-5 w-5 place-items-center rounded bg-gradient-to-br from-cyan-glow to-accent-500 text-[10px] font-bold text-ink-950">
-          M
-        </span>
-        <span className="text-[13px] text-mist-100">MiniMax Design</span>
+      <div className="sidebar-brand">
+        <span className="brand-symbol"><Icon name="wave" size={22} /></span>
+        <span>MiniMax <strong>H3</strong><small>H3 VIDEO WORKSPACE</small></span>
       </div>
 
+      <button type="button" className="mobile-project-close" aria-label="收起项目库" onClick={() => setMobileOpen(false)}><Icon name="close" size={18} /></button>
       {/* 主导航 */}
       <nav className="shrink-0 space-y-0.5 px-2">
         <button
           type="button"
           onClick={() => {
             setComposerOpen(true);
-            void useGraph.getState().createWorkflow(`工作流 ${useGraph.getState().workflows.length + 1}`);
+            setAction({ kind: activeProjectId ? 'workflow' : 'project', operation: 'create' });
           }}
+          disabled={busy}
+          aria-label="开始创作"
           className="mb-1 flex w-full items-center gap-2.5 rounded-lg px-2.5 py-[7px] text-left text-[13px] text-mist-100 hover:bg-ink-850"
         >
-          <span className="w-4 text-center text-[12px] text-mist-400">＋</span>
+          <span className="new-workflow-icon"><Icon name="plus" size={18} /></span>
           <span>开始创作</span>
         </button>
-        {navItem('projects', '▤')}
-        {navItem('skills', '⚙')}
-        {navItem('nodes', '▢')}
-        {navItem('tasks', '☰')}
+        {navItem('projects', 'folder')}
+        {navItem('skills', 'spark')}
+        {navItem('nodes', 'nodes')}
+        {navItem('tasks', 'tasks')}
       </nav>
-
-      {/* 项目树 */}
-      <div className="shrink-0 px-2 pt-3">
-        <button
-          type="button"
-          className="flex w-full items-center gap-1.5 px-1.5 py-1 text-left"
-          onClick={() => setProjectsOpen((v) => !v)}
-        >
-          <span className="text-[12px] text-mist-300">项目</span>
-          <span className="text-[10px] text-mist-500">{projectsOpen ? '⌄' : '›'}</span>
-          <span className="ml-auto text-[10px] text-mist-500">{projects.length}</span>
-        </button>
-
-        {projectsOpen && (
-          <div className="mb-2 space-y-0.5">
-            {projects.map((project) => (
-              <ProjectBranch key={project.id} projectId={project.id} active={project.id === activeProjectId} />
-            ))}
-
-            {creating ? (
-              <div className="px-1 pt-1">
-                <input
-                  autoFocus
-                  className="field !py-1 !text-[12px]"
-                  placeholder="项目名称，回车确认"
-                  value={draftName}
-                  onChange={(event) => setDraftName(event.target.value)}
-                  onKeyDown={(event) => {
-                    event.stopPropagation();
-                    if (event.key === 'Enter') void handleCreate();
-                    if (event.key === 'Escape') {
-                      setCreating(false);
-                      setDraftName('');
-                    }
-                  }}
-                />
-              </div>
-            ) : (
-              <button
-                type="button"
-                className="w-full rounded-lg px-1.5 py-1 text-left text-[11px] text-mist-500 hover:text-mist-200"
-                onClick={() => setCreating(true)}
-              >
-                ＋ 新建项目
-              </button>
-            )}
-          </div>
-        )}
-      </div>
 
       {/* 面板内容 */}
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="px-3 pb-1 pt-2 text-[10px] text-mist-500">{PANEL_TITLE[panel]}</div>
-        {panel === 'projects' && <ProjectsPanel />}
+        {panel !== 'projects' && <div className="px-3 pb-1 pt-2 text-[10px] text-mist-500">{PANEL_TITLE[panel]}</div>}
+        {panel === 'projects' && <ProjectTree onAction={setAction} />}
         {panel === 'skills' && <SkillsPanel />}
         {panel === 'nodes' && <NodeLibraryPanel />}
         {panel === 'tasks' && <TaskListPanel />}
@@ -186,7 +121,7 @@ export function LeftSidebar() {
       <div className="flex shrink-0 items-center gap-2 border-t border-ink-700/70 px-3 py-2">
         <span
           className="grid h-6 w-6 place-items-center rounded-full text-[10px] text-ink-950"
-          style={{ background: 'linear-gradient(135deg, #6ee7ff, #f59e0b)' }}
+          style={{ background: '#b9aff2' }}
         >
           A
         </span>
@@ -194,129 +129,8 @@ export function LeftSidebar() {
         <span className="ml-auto text-[10px] text-mist-500">v0.1</span>
       </div>
 
-      {error && (
-        <p className="shrink-0 border-t border-rose-500/30 bg-rose-500/5 p-2 text-[11px] text-rose-300">{error}</p>
-      )}
+      {action && <ProjectActionDialog action={action} onClose={() => setAction(null)} />}
     </aside>
-  );
-}
-
-/* ───────────────────────  项目树分支  ─────────────────────── */
-
-function ProjectBranch({ projectId, active }: { projectId: string; active: boolean }) {
-  const projects = useGraph((s) => s.projects);
-  const workflows = useGraph((s) => s.workflows);
-  const activeWorkflowId = useGraph((s) => s.activeWorkflowId);
-  const selectProject = useGraph((s) => s.selectProject);
-  const selectWorkflow = useGraph((s) => s.selectWorkflow);
-  const createWorkflow = useGraph((s) => s.createWorkflow);
-  const deleteWorkflow = useGraph((s) => s.deleteWorkflow);
-  const [open, setOpen] = useState(active);
-
-  const project = projects.find((p) => p.id === projectId);
-
-  useEffect(() => {
-    if (active) setOpen(true);
-  }, [active]);
-
-  return (
-    <div>
-      <button
-        type="button"
-        className={classNames(
-          'flex w-full items-center gap-1.5 rounded-lg px-1.5 py-1.5 text-left',
-          active ? 'bg-ink-800 text-mist-100' : 'text-mist-300 hover:bg-ink-850',
-        )}
-        onClick={() => {
-          setOpen((v) => !v);
-          if (!active) void selectProject(projectId);
-        }}
-      >
-        <span className="w-3 shrink-0 text-[10px] text-mist-500">{open ? '⌄' : '›'}</span>
-        <span className="shrink-0 text-[11px] text-mist-400">▤</span>
-        <span className="min-w-0 flex-1 truncate text-[12px]">{project?.name ?? '未命名项目'}</span>
-      </button>
-
-      {open && active && (
-        <div className="ml-4 space-y-0.5 border-l border-ink-700 pl-1.5 pt-0.5">
-          {workflows.map((workflow) => (
-            <button
-              key={workflow.id}
-              type="button"
-              onClick={() => void selectWorkflow(workflow.id)}
-              className={classNames(
-                'group flex w-full items-center gap-1.5 rounded-md px-1 py-1 text-left text-[11px]',
-                workflow.id === activeWorkflowId ? 'text-mist-100' : 'text-mist-300 hover:bg-ink-850',
-              )}
-              style={workflow.id === activeWorkflowId ? { background: '#262f40' } : undefined}
-            >
-              <WorkflowThumb workflowId={workflow.id} />
-              <span className="min-w-0 flex-1 truncate">{workflow.name}</span>
-              <span
-                role="button"
-                tabIndex={-1}
-                className="hidden shrink-0 px-0.5 text-mist-500 hover:text-rose-300 group-hover:inline"
-                title="删除工作流"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  void deleteWorkflow(workflow.id);
-                }}
-              >
-                ×
-              </span>
-            </button>
-          ))}
-          <button
-            type="button"
-            className="w-full rounded-md px-1 py-1 text-left text-[11px] text-mist-500 hover:text-mist-200"
-            onClick={() => void createWorkflow(`工作流 ${workflows.length + 1}`)}
-          >
-            ＋ 新建工作流
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-/** 工作流缩略图：取项目里最新的产物素材，没有就画一个稳定占位色块 */
-function WorkflowThumb({ workflowId }: { workflowId: string }) {
-  const projectId = useGraph((s) => s.activeProjectId);
-  const [asset, setAsset] = useState<AssetRecord | null>(null);
-
-  useEffect(() => {
-    let alive = true;
-    if (!projectId) return;
-    void api
-      .listAssets(projectId)
-      .then(({ items }) => {
-        if (!alive) return;
-        setAsset(items.find((a) => a.kind === 'video') ?? items[0] ?? null);
-      })
-      .catch(() => undefined);
-    return () => {
-      alive = false;
-    };
-  }, [projectId]);
-
-  const src = asset && asset.localPath ? api.assetContentUrl(asset.id) : '';
-
-  if (src && asset?.kind === 'video') {
-    return (
-      <span className="relative h-6 w-6 shrink-0 overflow-hidden rounded border border-ink-600 bg-ink-800">
-        <video src={src} className="h-full w-full object-cover" muted />
-        <span className="absolute inset-0 grid place-items-center text-[8px] text-mist-100">▶</span>
-      </span>
-    );
-  }
-
-  let hash = 0;
-  for (let i = 0; i < workflowId.length; i += 1) hash = (hash * 31 + workflowId.charCodeAt(i)) % 360;
-  return (
-    <span
-      className="h-6 w-6 shrink-0 rounded border border-ink-600"
-      style={{ background: `linear-gradient(135deg, hsl(${hash} 40% 30%), hsl(${(hash + 48) % 360} 35% 20%))` }}
-    />
   );
 }
 
@@ -534,108 +348,6 @@ function SkillCard({
   );
 }
 
-/* ───────────────────────  项目面板  ─────────────────────── */
-
-function ProjectsPanel() {
-  const projects = useGraph((s) => s.projects);
-  const workflows = useGraph((s) => s.workflows);
-  const activeProjectId = useGraph((s) => s.activeProjectId);
-  const activeWorkflowId = useGraph((s) => s.activeWorkflowId);
-  const selectWorkflow = useGraph((s) => s.selectWorkflow);
-  const updateProject = useGraph((s) => s.updateProject);
-  const deleteProject = useGraph((s) => s.deleteProject);
-  const [draft, setDraft] = useState('');
-  const [renaming, setRenaming] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const active = projects.find((p) => p.id === activeProjectId);
-  if (!active) return <p className="px-3 py-2 text-[11px] text-mist-500">还没有选中项目。</p>;
-
-  return (
-    <div className="space-y-2 px-3 pb-3">
-      <div className="rounded-lg border border-ink-700 bg-ink-850 p-2">
-        <div className="flex items-center gap-1.5">
-          <span className="text-[12px] text-mist-200">{active.name}</span>
-          <button
-            type="button"
-            className="ml-auto text-[10px] text-mist-500 hover:text-mist-200"
-            onClick={() => {
-              setRenaming(true);
-              setDraft(active.name);
-            }}
-          >
-            重命名
-          </button>
-        </div>
-
-        {renaming ? (
-          <div className="mt-1.5 flex items-center gap-1">
-            <input
-              autoFocus
-              className="field !py-1 !text-[12px]"
-              value={draft}
-              onChange={(event) => setDraft(event.target.value)}
-              onKeyDown={(event) => {
-                event.stopPropagation();
-                if (event.key === 'Enter') {
-                  void updateProject(active.id, { name: draft.trim() || active.name }).then(() => setRenaming(false));
-                }
-                if (event.key === 'Escape') setRenaming(false);
-              }}
-            />
-            <button
-              type="button"
-              className="btn btn-xs btn-primary"
-              onClick={() =>
-                void updateProject(active.id, { name: draft.trim() || active.name }).then(() => setRenaming(false))
-              }
-            >
-              保存
-            </button>
-          </div>
-        ) : (
-          <p className="mt-1 text-[10px] text-mist-500">
-            {workflows.length} 个工作流 · {active.taskCount ?? 0} 个任务
-          </p>
-        )}
-
-        <button
-          type="button"
-          className="mt-1.5 text-[10px] text-rose-300/80 hover:text-rose-300"
-          onClick={() => {
-            if (projects.length <= 1) {
-              setError('至少保留一个项目。');
-              return;
-            }
-            void deleteProject(active.id);
-          }}
-        >
-          删除项目
-        </button>
-      </div>
-
-      <div className="space-y-0.5">
-        {workflows.map((workflow) => (
-          <button
-            key={workflow.id}
-            type="button"
-            onClick={() => void selectWorkflow(workflow.id)}
-            className={classNames(
-              'flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-left text-[11px]',
-              workflow.id === activeWorkflowId ? 'bg-ink-700 text-mist-100' : 'text-mist-300 hover:bg-ink-850',
-            )}
-          >
-            <span className="min-w-0 flex-1 truncate">{workflow.name}</span>
-            <span className="text-[10px] text-mist-500">{workflow.graph.nodes.length}</span>
-          </button>
-        ))}
-      </div>
-
-      {error && <p className="rounded-md border border-rose-500/40 p-1.5 text-[11px] text-rose-300">{error}</p>}
-    </div>
-  );
-}
-
 /* ───────────────────────  任务列表  ─────────────────────── */
 
 const STATUS_STYLE: Record<string, string> = {
@@ -663,26 +375,36 @@ function TaskListPanel() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
+  const [listedIds, setListedIds] = useState<string[] | null>(null);
+  const requestSeq = useRef(0);
+  const visibleTasks = tasks.filter((task) =>
+    (listedIds === null ? !activeProjectId || task.projectId === activeProjectId : listedIds.includes(task.id)) &&
+    (filter === 'all' || task.status === filter));
 
   const load = useCallback(
-    async (remote: boolean) => {
+    async (remote: boolean, nextFilter = filter) => {
+      const request = ++requestSeq.current;
       setBusy(true);
       setError(null);
       try {
         const result = await api.listTasks({
           pageSize: 40,
           remote,
-          ...(filter !== 'all' ? { status: filter } : {}),
+          ...(nextFilter !== 'all' ? { status: nextFilter } : {}),
           ...(activeProjectId && !remote ? { projectId: activeProjectId } : {}),
         });
-        setTasks(result.items);
+        if (request !== requestSeq.current) return;
+        // Filtering is presentation state; retain pending tasks for background polling.
+        result.items.forEach(upsertTask);
+        setListedIds(result.items.map((task) => task.id));
       } catch (cause) {
+        if (request !== requestSeq.current) return;
         setError(cause instanceof ApiRequestError ? cause.message : (cause as Error).message);
       } finally {
-        setBusy(false);
+        if (request === requestSeq.current) setBusy(false);
       }
     },
-    [activeProjectId, filter, setTasks],
+    [activeProjectId, filter, upsertTask],
   );
 
   const handleDelete = async (taskId: string) => {
@@ -691,7 +413,10 @@ function TaskListPanel() {
       const result = await api.deleteTask(taskId);
       const existing = tasks.find((t) => t.id === taskId);
       if (result.action === 'cancelled' && existing) upsertTask({ ...existing, status: 'cancelled' });
-      else await load(false);
+      else {
+        setTasks(useGraph.getState().tasks.filter((task) => task.id !== taskId));
+        await load(false);
+      }
     } catch (cause) {
       setError(cause instanceof ApiRequestError ? cause.message : (cause as Error).message);
     }
@@ -703,9 +428,10 @@ function TaskListPanel() {
         <select
           className="field !py-1 !text-[11px]"
           value={filter}
+          aria-label="任务状态筛选"
           onChange={(event) => {
             setFilter(event.target.value);
-            void load(false);
+            void load(false, event.target.value);
           }}
         >
           <option value="all">全部状态</option>
@@ -729,11 +455,11 @@ function TaskListPanel() {
         </button>
       </div>
 
-      {tasks.length === 0 && (
-        <p className="py-2 text-[11px] text-mist-500">还没有任务记录。点「远端」可拉取最近 7 天历史。</p>
+      {visibleTasks.length === 0 && (
+        <p className="py-2 text-[11px] text-mist-500">{busy ? '正在加载任务…' : '暂无符合条件的任务。点「远端」可拉取最近 7 天历史。'}</p>
       )}
 
-      {tasks.map((task) => {
+      {visibleTasks.map((task) => {
         const open = openId === task.id;
         return (
           <div key={task.id} className="rounded-lg border border-ink-700 bg-ink-850">

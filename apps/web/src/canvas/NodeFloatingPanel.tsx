@@ -10,15 +10,16 @@
  * （曾经把右上角的关闭按钮彻底挡死）。拖动本身由容器自己的 pointer 事件驱动，
  * 抓手只负责提供光标与命中区域提示。
  *
- * 尺寸：宽度按视口自适应（最多 760px，够放三列），高度超出视口时可内部滚动。
+ * 尺寸：纵向参数面板最多 420px，高度超出视口时可内部滚动。
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useStore, useViewport } from '@xyflow/react';
+import { useCanvasBridge } from './canvas-bridge.ts';
+import { useSettingsPanel } from '../store/settings-panel.ts';
 
-/** 首选宽度：够放三列 */
-const PREFERRED_WIDTH = 760;
-const MIN_WIDTH = 300;
+/** 与创作台参数弹窗保持同一宽度。 */
+const PREFERRED_WIDTH = 420;
 const VIEWPORT_MARGIN = 12;
 const GAP = 10;
 /** 顶部可拖动区域的高度 */
@@ -47,6 +48,17 @@ export function NodeFloatingPanel({ nodeId, children, deps = [] }: Props) {
   const nodeHeight = useStore((state) => state.nodeLookup.get(nodeId)?.measured?.height ?? 0);
 
   const viewport = useViewport();
+  const canvasRect = useCanvasBridge((s) => s.rect);
+  const [windowSize, setWindowSize] = useState({ width: window.innerWidth, height: window.innerHeight });
+  useEffect(() => {
+    const resize = () => setWindowSize({ width: window.innerWidth, height: window.innerHeight });
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') useSettingsPanel.getState().close();
+    };
+    window.addEventListener('resize', resize);
+    window.addEventListener('keydown', onKey);
+    return () => { window.removeEventListener('resize', resize); window.removeEventListener('keydown', onKey); };
+  }, []);
 
   /* 量真实尺寸：既要决定「往下弹还是往上弹」，也要按视口宽度自适应 */
   useEffect(() => {
@@ -74,9 +86,10 @@ export function NodeFloatingPanel({ nodeId, children, deps = [] }: Props) {
   const onDragStart = useCallback(
     (event: React.PointerEvent) => {
       // 落在控件上的按下不进入拖动，交给控件自己处理
-      if ((event.target as HTMLElement).closest('button, input, select, textarea, a')) return;
+      if ((event.target as HTMLElement).closest('button, input, select, textarea, a, summary, label')) return;
       event.preventDefault();
       event.stopPropagation();
+      event.currentTarget.setPointerCapture?.(event.pointerId);
       dragState.current = {
         startX: event.clientX,
         startY: event.clientY,
@@ -103,16 +116,16 @@ export function NodeFloatingPanel({ nodeId, children, deps = [] }: Props) {
 
   if (x === null || y === null) return null;
 
-  const screenLeft = x * viewport.zoom + viewport.x;
-  const screenTop = y * viewport.zoom + viewport.y;
+  const screenLeft = x * viewport.zoom + viewport.x + (canvasRect?.left ?? 0);
+  const screenTop = y * viewport.zoom + viewport.y + (canvasRect?.top ?? 0);
   const screenBottom = screenTop + nodeHeight * viewport.zoom;
 
-  const viewportWidth = typeof window === 'undefined' ? 1440 : window.innerWidth;
-  const viewportHeight = typeof window === 'undefined' ? 900 : window.innerHeight;
+  const viewportWidth = windowSize.width;
+  const viewportHeight = windowSize.height;
   const maxHeight = viewportHeight - VIEWPORT_MARGIN * 2;
 
   // 宽度自适应视口，但不超过首选宽度
-  const availableWidth = Math.max(MIN_WIDTH, viewportWidth - VIEWPORT_MARGIN * 2);
+  const availableWidth = Math.max(0, viewportWidth - VIEWPORT_MARGIN * 2);
   const panelWidth = Math.min(PREFERRED_WIDTH, availableWidth);
 
   const anchorLeft = screenLeft + dragOffset.x;
@@ -129,7 +142,9 @@ export function NodeFloatingPanel({ nodeId, children, deps = [] }: Props) {
   return createPortal(
     <div
       ref={wrapperRef}
-      className="nowheel fixed z-[60]"
+      className="nowheel fixed z-[40]"
+      role="dialog"
+      aria-label="视频节点参数"
       style={{ left, top, width: panelWidth, maxHeight }}
       onPointerDown={(event) => event.stopPropagation()}
       onMouseDown={(event) => event.stopPropagation()}
@@ -145,11 +160,12 @@ export function NodeFloatingPanel({ nodeId, children, deps = [] }: Props) {
       />
 
       <div
-        className="overflow-y-auto rounded-xl border border-ink-600 bg-ink-900/98 p-3 shadow-2xl backdrop-blur"
+        className="node-settings-surface overflow-y-auto"
         style={{ maxHeight }}
         onPointerDown={onDragStart}
         onPointerMove={onDragMove}
         onPointerUp={onDragEnd}
+        onPointerCancel={onDragEnd}
       >
         {children}
       </div>

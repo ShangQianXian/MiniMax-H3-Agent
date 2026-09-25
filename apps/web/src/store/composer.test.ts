@@ -16,8 +16,11 @@ import {
   composerMode,
   makeComposerMedia,
   planMaterialize,
+  materializeToCanvas,
   type ComposerMedia,
 } from './composer.ts';
+import { useGraph } from './graph.ts';
+import { resolveNodeSlots } from '../engine/resolve.ts';
 
 const image = (name: string): ComposerMedia =>
   makeComposerMedia({ kind: 'image', url: `data:image/png;base64,AAAA-${name}`, name, bytes: 1024 });
@@ -37,6 +40,23 @@ const baseDraft = {
   aigcWatermark: false,
   sound: '有声' as const,
 };
+
+describe('落地后的素材语义', () => {
+  it('将临时素材角色映射到真实节点 ID，单张参考图不会误变成首帧', () => {
+    useGraph.setState({ nodes: [], edges: [], past: [], future: [] });
+    const id = materializeToCanvas(planMaterialize({ draft: { ...baseDraft, presetId: '全能参考', media: [image('a')] }, targetNodeId: null, anchor: { x: 0, y: 0 } }));
+    const graph = useGraph.getState();
+    expect(resolveNodeSlots(id, graph.nodes, graph.edges).media[0]?.ref.explicitRole).toBe('reference_image');
+  });
+  it('单段参考视频不会被写入图片角色', () => {
+    useGraph.setState({ nodes: [], edges: [], past: [], future: [] });
+    const id = materializeToCanvas(planMaterialize({ draft: { ...baseDraft, presetId: '全能参考', media: [video('a')] }, targetNodeId: null, anchor: { x: 0, y: 0 } }));
+    const graph = useGraph.getState();
+    const slot = resolveNodeSlots(id, graph.nodes, graph.edges).media[0];
+    expect(slot?.role).toBe('reference_video');
+    expect(slot?.ref.explicitRole).toBeUndefined();
+  });
+});
 
 describe('生成方式定义', () => {
   it('四个生成方式都有合法角色与场景', () => {
