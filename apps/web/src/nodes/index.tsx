@@ -31,6 +31,7 @@ import { useSettingsPanel } from '../store/settings-panel.ts';
 import { api } from '../api/client.ts';
 import { classNames, fileToOutcome, formatBytes, probeMedia, willExceedBodyLimit } from '../lib/media.ts';
 import { STATUS_LABEL, type NodeRuntime } from '../canvas/workflow-types.ts';
+import { MediaPreview } from '../layout/MediaPreview.tsx';
 
 /* ───────────────────────  共享 hook  ─────────────────────── */
 
@@ -189,30 +190,8 @@ function MediaNode({ id, data, selected }: NodeProps<CanvasNode>) {
         </div>
       ) : (
         <>
-          {kind === 'image' && (
-            <img
-              src={displayUrl}
-              alt={name}
-              className="h-[160px] w-full rounded-lg bg-ink-850 object-contain"
-              draggable={false}
-            />
-          )}
-          {kind === 'video' && (
-            <div className="relative">
-              <video
-                src={displayUrl}
-                className="h-[120px] w-full rounded-lg bg-black object-cover"
-                muted
-                playsInline
-                preload="metadata"
-              />
-              <span className="pointer-events-none absolute inset-0 grid place-items-center">
-                <span className="grid h-9 w-9 place-items-center rounded-full bg-ink-950/70 text-[12px] text-mist-100">
-                  ▶
-                </span>
-              </span>
-            </div>
-          )}
+          {(kind === 'image' || kind === 'video') && <MediaPreview src={displayUrl} kind={kind} name={name} nodeId={id}
+            assetId={typeof data.params.assetId === 'string' ? data.params.assetId : undefined} />}
           {kind === 'audio' && (
             <div className="flex h-[52px] items-center gap-2 rounded-lg bg-ink-850 px-2">
               <span className="text-[14px] text-amber-300">♪</span>
@@ -375,7 +354,7 @@ export const VideoGenNode = memo(function VideoGenNode({ id, data, selected }: N
           title="点击调整参数"
         >
           {runtime?.outputUrl ? (
-            <video src={runtime.outputUrl} className="h-[156px] w-full bg-black object-contain" controls muted playsInline onClick={(event) => event.stopPropagation()} />
+            <MediaPreview src={runtime.outputUrl} kind="video" taskId={runtime.taskId ?? lastRun.lastTaskId} nodeId={id} />
           ) : (
             <div className="grid h-[156px] w-full place-items-center">
               <span className="grid h-9 w-9 place-items-center rounded-full bg-ink-800 text-[12px] text-mist-200">▶</span>
@@ -643,7 +622,7 @@ export const RegenerateNode = memo(function RegenerateNode({ id, data, selected 
       )}
 
       {runtime?.outputUrl && (
-        <video src={runtime.outputUrl} className="mt-1.5 w-full rounded-lg bg-black" controls muted playsInline />
+        <MediaPreview src={runtime.outputUrl} kind="video" taskId={runtime.taskId ?? String(data.params.lastTaskId ?? '')} nodeId={id} />
       )}
       <RuntimeHint runtime={runtime} />
     </NodeShell>

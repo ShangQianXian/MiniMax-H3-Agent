@@ -8,6 +8,7 @@ import { Router, raw, type Request, type Response } from 'express';
 import { MEDIA_LIMITS } from '@h3/shared';
 import type { AppContext } from '../context.ts';
 import { param, queryString } from '../http.ts';
+import { VideoEditError, VideoEditService } from '../services/video-edit.ts';
 
 const KIND_LIMITS: Record<string, number> = {
   image: MEDIA_LIMITS.image.maxBytes,
@@ -17,6 +18,32 @@ const KIND_LIMITS: Record<string, number> = {
 
 export function createAssetRouter(ctx: AppContext): Router {
   const router = Router();
+  const videoEdit = new VideoEditService(ctx.assets);
+  const editError = (error: unknown, res: Response) => {
+    res.status(error instanceof VideoEditError ? error.status : 500).json({
+      error: error instanceof VideoEditError ? error.message : '视频处理失败，请检查文件是否完整后重试。',
+    });
+  };
+
+  router.get('/:id/video-metadata', async (req, res) => {
+    try { res.json({ metadata: await videoEdit.metadata(param(req, 'id')) }); }
+    catch (error) { editError(error, res); }
+  });
+
+  router.get('/:id/frames/:frame', async (req, res) => {
+    try {
+      const frame = await videoEdit.frame(param(req, 'id'), Number(param(req, 'frame')));
+      res.set({ 'Content-Type': 'image/jpeg', 'Cache-Control': 'private, max-age=3600' }).send(frame);
+    } catch (error) { editError(error, res); }
+  });
+
+  router.post('/:id/trim', async (req, res) => {
+    try {
+      res.json(await videoEdit.trim(param(req, 'id'), {
+        startFrame: req.body?.startFrame, endFrame: req.body?.endFrame,
+      }));
+    } catch (error) { editError(error, res); }
+  });
 
   router.get('/', (req: Request, res: Response) => {
     const projectId = queryString(req, 'projectId');

@@ -327,6 +327,11 @@ export function createH3Router(ctx: AppContext): Router {
     }
 
     try {
+      const existing = local.localPath ? ctx.assets.getByLocalPath(local.localPath) : null;
+      if (existing && ctx.assets.stat(existing.id)) {
+        res.json({ asset: existing, task: local });
+        return;
+      }
       const asset = await ctx.assets.fetchArtifact({
         url: local.contentUrl,
         taskId,

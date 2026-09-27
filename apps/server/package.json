@@ -8,6 +8,8 @@
     "start": "node src/bin.ts"
   },
   "dependencies": {
+    "@ffmpeg-installer/ffmpeg": "^1.1.0",
+    "@ffprobe-installer/ffprobe": "^2.1.2",
     "@h3/shared": "workspace:*",
     "express": "^5.1.0",
     "zod": "^4.1.11"

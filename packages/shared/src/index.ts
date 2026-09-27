@@ -16,3 +16,4 @@ export * from './api-validation.ts';
 export * from './workflow-schema.ts';
 export * from './error-codes.ts';
 export * from './skills.ts';
+export * from './video-edit.ts';
