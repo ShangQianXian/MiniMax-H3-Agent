@@ -1,16 +1,12 @@
 /**
  * 节点操作条的回归测试（对应错误2：点不动「运行 / 复制 / 删除」）。
  *
- * 根因：这些按钮原先没有 nodrag 类，React Flow 会把 pointerdown 判定为「拖拽起手」，
- * 于是按钮的 click 永远不触发。
- *
- * 注意：无法在 jsdom 里复现 React Flow 的拖拽判定，所以这里直接断言
- * 「操作条与按钮都带 nodrag，且 pointerdown 不会冒泡」——
- * 这两条正是修复的本质，也能挡住以后有人把类名删掉。
+ * 只有按钮阻止拖拽；操作条空白、标题和卡片本体必须允许开始拖拽。
+ * jsdom 检查事件传播与交互标记，真实拖动另在浏览器中验证。
  */
 // @vitest-environment jsdom
-import { cleanup, render, screen } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createElement } from 'react';
 import { ReactFlowProvider } from '@xyflow/react';
 import { defaultParamsFor } from '@h3/shared';
@@ -19,12 +15,12 @@ import { useGraph } from '../store/graph.ts';
 
 const NODE_ID = 'videoGen-test';
 
-function renderShell(onRun = () => undefined) {
+function renderShell(onRun = () => undefined, onDragStart = () => undefined) {
   return render(
     createElement(
       ReactFlowProvider,
       null,
-      createElement(NodeShell, {
+      createElement('div', { onPointerDown: onDragStart, onMouseDown: onDragStart }, createElement(NodeShell, {
         id: NODE_ID,
         type: 'videoGen',
         data: {
@@ -34,7 +30,7 @@ function renderShell(onRun = () => undefined) {
         },
         selected: false,
         onRun,
-      }),
+      })),
     ),
   );
 }
@@ -82,19 +78,42 @@ describe('节点操作条可点击性', () => {
     expect(bar.className).not.toContain('-top-');
   });
 
-  it('未悬停时操作条只是变透明，不会变成不可点击', () => {
+  it('操作条空白不参与命中，按钮仍可接收点击', () => {
     renderShell();
     const bar = screen.getByText('▶ 运行').parentElement!;
-    // 不能再出现 pointer-events-none：那会让按钮彻底点不动
-    expect(bar.className).not.toContain('pointer-events-none');
+    expect(bar.classList.contains('pointer-events-none')).toBe(true);
     expect(bar.className).toContain('opacity-0');
+    for (const button of bar.querySelectorAll('button')) {
+      expect(button.classList.contains('pointer-events-auto')).toBe(true);
+    }
   });
 
-  it('操作条容器带 nodrag/nopan 且拦截 pointerdown 冒泡', () => {
-    renderShell();
+  it('顶部空白与标题允许鼠标、触摸事件传到节点，悬停前后都不禁用拖拽', () => {
+    const onDragStart = vi.fn();
+    renderShell(undefined, onDragStart);
     const bar = screen.getByText('▶ 运行').parentElement!;
-    expect(bar.className).toContain('nodrag');
-    expect(bar.className).toContain('nopan');
+    const title = screen.getByText('视频生成');
+    for (const hovered of [false, true, false]) {
+      if (hovered) fireEvent.mouseEnter(bar.parentElement!);
+      else fireEvent.mouseLeave(bar.parentElement!);
+      for (const target of [bar, title]) {
+        expect(target.closest('.nodrag, .nopan')).toBeNull();
+        onDragStart.mockClear();
+        fireEvent.pointerDown(target, { pointerType: 'touch' });
+        fireEvent.mouseDown(target, { button: 0 });
+        expect(onDragStart).toHaveBeenCalledTimes(2);
+      }
+    }
+  });
+
+  it('运行、复制、删除按钮阻止鼠标和触摸拖拽事件冒泡', () => {
+    const onDragStart = vi.fn();
+    renderShell(undefined, onDragStart);
+    for (const button of screen.getAllByRole('button')) {
+      fireEvent.pointerDown(button, { pointerType: 'touch' });
+      fireEvent.mouseDown(button, { button: 0 });
+    }
+    expect(onDragStart).not.toHaveBeenCalled();
   });
 
   it('复制与删除按钮都带 nodrag', () => {

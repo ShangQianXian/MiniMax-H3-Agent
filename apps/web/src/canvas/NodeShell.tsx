@@ -8,9 +8,9 @@
  *  - 卡片只负责「展示 + 触发」，保持画面干净。
  */
 import { Handle, Position } from '@xyflow/react';
-import { memo, useState } from 'react';
+import { memo, useState, type SyntheticEvent } from 'react';
 import { nodeDef, type NodeKind, type PortKind } from '@h3/shared';
-import { useGraph, type CanvasNode } from '../store/graph.ts';
+import { useGraph } from '../store/graph.ts';
 import { STATUS_COLOR, STATUS_LABEL, type CanvasNodeData, type NodeRuntime } from './workflow-types.ts';
 import { classNames } from '../lib/media.ts';
 
@@ -36,6 +36,8 @@ const PORT_CLASS: Record<PortKind, string> = {
   video: 'port-video',
   any: 'port-any',
 };
+
+const stopActionDrag = (event: SyntheticEvent) => event.stopPropagation();
 
 function PortHandles({ nodeId, kind }: { nodeId: string; kind: NodeKind }) {
   const def = nodeDef(kind);
@@ -103,27 +105,27 @@ export const NodeShell = memo(function NodeShell(props: NodeShellProps) {
         鼠标从节点移向按钮时才不会触发 onMouseLeave 而把自己藏起来
         —— 这正是「运行那排按钮点不动」的根因。
       */
-      className="min-node group relative pt-8 shadow-xl"
+      className="min-node group relative cursor-grab pt-8 shadow-xl active:cursor-grabbing"
       data-selected={selected ? 'true' : 'false'}
       data-dim={data.disabled ? 'true' : 'false'}
       style={{ width, ...(borderStyle ?? {}) }}
     >
       {/*
-        操作条常驻在顶部内边距里，只在非悬停时变暗而不是彻底隐形 ——
-        这样它始终可点，且不会因为过渡动画而错过点击。
+        操作条的空白区域透传到节点，只有按钮拦截拖拽。
+        按钮仍留在节点内部，鼠标移向按钮时不会触发节点的 mouseleave。
       */}
       <div
         className={classNames(
-          'nodrag nopan absolute left-0 right-0 top-1 flex items-center justify-end gap-1 px-2 transition-opacity',
+          'pointer-events-none absolute left-0 right-0 top-1 flex items-center justify-end gap-1 px-2 transition-opacity',
           hovered || active ? 'opacity-100' : 'opacity-0',
         )}
-        onPointerDown={(event) => event.stopPropagation()}
-        onMouseDown={(event) => event.stopPropagation()}
       >
         {onRun && (
           <button
             type="button"
-            className="nodrag rounded-md border border-ink-600 bg-ink-800/95 px-1.5 py-0.5 text-[10px] text-mist-200 hover:bg-ink-700"
+            className="nodrag nopan pointer-events-auto rounded-md border border-ink-600 bg-ink-800/95 px-1.5 py-0.5 text-[10px] text-mist-200 hover:bg-ink-700"
+            onPointerDown={stopActionDrag}
+            onMouseDown={stopActionDrag}
             onClick={(event) => {
               event.stopPropagation();
               onRun();
@@ -135,7 +137,9 @@ export const NodeShell = memo(function NodeShell(props: NodeShellProps) {
         )}
         <button
           type="button"
-          className="nodrag rounded-md border border-ink-600 bg-ink-800/95 px-1.5 py-0.5 text-[10px] text-mist-200 hover:bg-ink-700"
+          className="nodrag nopan pointer-events-auto rounded-md border border-ink-600 bg-ink-800/95 px-1.5 py-0.5 text-[10px] text-mist-200 hover:bg-ink-700"
+          onPointerDown={stopActionDrag}
+          onMouseDown={stopActionDrag}
           onClick={(event) => {
             event.stopPropagation();
             useGraph.getState().duplicateNode(id);
@@ -146,7 +150,9 @@ export const NodeShell = memo(function NodeShell(props: NodeShellProps) {
         </button>
         <button
           type="button"
-          className="nodrag rounded-md border border-ink-600 bg-ink-800/95 px-1.5 py-0.5 text-[10px] text-mist-200 hover:bg-ink-700"
+          className="nodrag nopan pointer-events-auto rounded-md border border-ink-600 bg-ink-800/95 px-1.5 py-0.5 text-[10px] text-mist-200 hover:bg-ink-700"
+          onPointerDown={stopActionDrag}
+          onMouseDown={stopActionDrag}
           onClick={(event) => {
             event.stopPropagation();
             useGraph.getState().removeNodes([id]);
