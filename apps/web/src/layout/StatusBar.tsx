@@ -88,7 +88,7 @@ export function StatusBar() {
       <span className="ml-auto flex items-center gap-3">
         <span>撤销 {past.length}</span>
         <span>重做 {future.length}</span>
-        <span className="hidden md:inline">Shift+L 布局 · Ctrl+Z 撤销 · Delete 删除 · 双击空白加提示词</span>
+        <span className="hidden md:inline">拖线到空白处添加节点 · 选中连线可断开 · Ctrl+Z 撤销 · Delete 删除</span>
       </span>
     </footer>
   );

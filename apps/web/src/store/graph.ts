@@ -27,6 +27,7 @@ import {
 } from '@h3/shared';
 import { api, type ProjectRecord, type TaskRecord, type WorkflowRecord } from '../api/client.ts';
 import { resolveNodeSlots } from '../engine/resolve.ts';
+import { compatibleNodePorts, type ConnectionOrigin } from '../canvas/connections.ts';
 import {
   issueCountEquals,
   runtimeEquals,
@@ -82,10 +83,12 @@ interface GraphState {
   onEdgesChange: (changes: EdgeChange<CanvasEdge>[]) => void;
   onConnect: (connection: Connection) => boolean;
   addNode: (kind: NodeKind, position: XYPosition, params?: Record<string, unknown>) => string;
+  addConnectedNode: (kind: NodeKind, position: XYPosition, origin: ConnectionOrigin, handleId: string) => string | null;
   updateNodeParams: (nodeId: string, patch: Record<string, unknown>) => void;
   setNodeRuntime: (nodeId: string, patch: Partial<NodeRuntime>) => void;
   clearRuntime: () => void;
   removeNodes: (ids: string[]) => void;
+  removeElements: (nodeIds: string[], edgeIds: string[]) => void;
   duplicateNode: (id: string) => void;
   setSelectedNode: (id: string | null) => void;
   toggleNodeDisabled: (id: string) => void;
@@ -382,6 +385,33 @@ export const useGraph = create<GraphState>((rawSet, get) => {
     return node.id;
   },
 
+  addConnectedNode: (kind, position, origin, handleId) => {
+    const existing = get().nodes.find((node) => node.id === origin.nodeId);
+    if (!existing) return null;
+    const def = nodeDef(existing.data.kind);
+    const port = (origin.handleType === 'source' ? def.outputs : def.inputs)
+      .find((candidate) => candidate.id === origin.handleId);
+    if (!port || !compatibleNodePorts(kind, port.kind, origin.handleType).some((candidate) => candidate.id === handleId)) return null;
+
+    const node = makeNode(kind, position);
+    const connection = origin.handleType === 'source'
+      ? { source: existing.id, sourceHandle: port.id, target: node.id, targetHandle: handleId }
+      : { source: node.id, sourceHandle: handleId, target: existing.id, targetHandle: port.id };
+    // 节点和连线作为同一次操作保存、撤销，取消菜单不会留下孤立节点。
+    set((state) => ({
+      past: [...state.past, snapshot(state)].slice(-MAX_HISTORY),
+      future: [],
+      nodes: [...state.nodes.map((item) => item.selected ? { ...item, selected: false } : item), { ...node, selected: true }],
+      edges: [...state.edges.map((edge) => edge.selected ? { ...edge, selected: false } : edge), {
+        ...connection,
+        id: `e-${connection.source}-${connection.sourceHandle}-${connection.target}-${connection.targetHandle}`,
+        type: 'default',
+      }],
+      selectedNodeId: node.id,
+    }));
+    return node.id;
+  },
+
   applyMaterialized: (newNodes, newEdges, roleOverrides) => {
     if (newNodes.length === 0 && newEdges.length === 0) return;
     set((state) => {
@@ -462,12 +492,19 @@ export const useGraph = create<GraphState>((rawSet, get) => {
   },
 
   removeNodes: (ids) => {
-    const idSet = new Set(ids);
+    get().removeElements(ids, []);
+  },
+
+  removeElements: (nodeIds, edgeIds) => {
+    const idSet = new Set(nodeIds);
+    const edgeSet = new Set(edgeIds);
+    const { nodes, edges } = get();
+    if (!nodes.some((node) => idSet.has(node.id)) && !edges.some((edge) => edgeSet.has(edge.id))) return;
     set((state) => ({
       past: [...state.past, snapshot(state)].slice(-MAX_HISTORY),
       future: [],
       nodes: state.nodes.filter((n) => !idSet.has(n.id)),
-      edges: state.edges.filter((e) => !idSet.has(e.source) && !idSet.has(e.target)),
+      edges: state.edges.filter((e) => !edgeSet.has(e.id) && !idSet.has(e.source) && !idSet.has(e.target)),
       selectedNodeId: state.selectedNodeId && idSet.has(state.selectedNodeId) ? null : state.selectedNodeId,
     }));
   },

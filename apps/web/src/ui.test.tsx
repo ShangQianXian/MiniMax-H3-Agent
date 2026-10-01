@@ -299,7 +299,7 @@ describe('渲染冒烟测试', () => {
     render(createElement(StatusBar));
     expect(await screen.findByText(/MOCK 模式/, {}, { timeout: 4000 })).toBeTruthy();
     expect(screen.getByText(/节点 0 · 连线 0/)).toBeTruthy();
-    expect(screen.getByText(/Shift\+L 布局/)).toBeTruthy();
+    expect(screen.getByText(/拖线到空白处添加节点/)).toBeTruthy();
   });
 });
 

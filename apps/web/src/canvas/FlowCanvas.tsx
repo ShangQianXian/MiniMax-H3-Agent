@@ -17,6 +17,8 @@ import {
   type Connection,
   type EdgeChange,
   type NodeChange,
+  type OnConnectEnd,
+  type XYPosition,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { NODE_DEFS, isPortCompatible, type NodeKind, type PortKind } from '@h3/shared';
@@ -28,8 +30,19 @@ import { nodeTypes } from '../nodes/index.tsx';
 import { Icon } from '../layout/Icon.tsx';
 import { NodePickerMenu } from '../layout/NodePickerMenu.tsx';
 import { downloadText } from '../lib/media.ts';
+import { DisconnectableEdge } from './DisconnectableEdge.tsx';
+import type { ConnectionOrigin } from './connections.ts';
 
 export const DRAG_MIME = 'application/h3-node-kind';
+const edgeTypes = { default: DisconnectableEdge };
+
+interface ConnectionPicker {
+  origin: ConnectionOrigin;
+  position: XYPosition;
+  anchor: XYPosition;
+  portKind: PortKind;
+  label: string;
+}
 
 function CanvasInner() {
   const { screenToFlowPosition, fitView, zoomIn, zoomOut, zoomTo } = useReactFlow();
@@ -42,13 +55,14 @@ function CanvasInner() {
   const onConnect = useGraph((s) => s.onConnect);
   const addNode = useGraph((s) => s.addNode);
   const setSelectedNode = useGraph((s) => s.setSelectedNode);
-  const removeNodes = useGraph((s) => s.removeNodes);
+  const removeElements = useGraph((s) => s.removeElements);
   const duplicateNode = useGraph((s) => s.duplicateNode);
   const undo = useGraph((s) => s.undo);
   const redo = useGraph((s) => s.redo);
   const exportGraph = useGraph((s) => s.exportGraph);
   const importGraph = useGraph((s) => s.importGraph);
   const workflowName = useGraph((s) => s.workflowName);
+  const workflowId = useGraph((s) => s.activeWorkflowId);
   const openGuide = useSettingsPanel((s) => s.openGuide);
   const composerOpen = useSettingsPanel((s) => s.composerOpen);
   const setComposerOpen = useSettingsPanel((s) => s.setComposerOpen);
@@ -57,9 +71,51 @@ function CanvasInner() {
   const [minimap, setMinimap] = useState(true);
   const [canvasOnly, setCanvasOnly] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [connectionPicker, setConnectionPicker] = useState<ConnectionPicker | null>(null);
+  const connectionCancelled = useRef(false);
   const [importError, setImportError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
+  const closePicker = useCallback(() => {
+    setPickerOpen(false);
+    setConnectionPicker(null);
+    wrapperRef.current?.focus({ preventScroll: true });
+  }, []);
+
+  useEffect(() => {
+    setPickerOpen(false);
+    setConnectionPicker(null);
+    connectionCancelled.current = true;
+  }, [workflowId]);
+
+  useEffect(() => {
+    if (connectionPicker && !nodes.some((node) => node.id === connectionPicker.origin.nodeId)) closePicker();
+  }, [nodes, connectionPicker, closePicker]);
+
+  const handleConnectEnd = useCallback<OnConnectEnd>((event, connection) => {
+    if (connectionCancelled.current || event.type === 'touchcancel' || connection.isValid || !connection.fromHandle) return;
+    const point = 'changedTouches' in event ? event.changedTouches[0] : event;
+    if (!point) return;
+    // 触摸结束事件仍指向起点，用实际落点命中检测，避免在节点或工具栏上误建节点。
+    const target = document.elementFromPoint(point.clientX, point.clientY);
+    if (!target?.classList.contains('react-flow__pane') || !wrapperRef.current?.contains(target)) return;
+    const handle = connection.fromHandle;
+    const node = useGraph.getState().nodes.find((item) => item.id === handle.nodeId);
+    if (!node) return;
+    const def = NODE_DEFS[node.data.kind];
+    const port = (handle.type === 'source' ? def.outputs : def.inputs).find((item) => item.id === handle.id);
+    if (!port) return;
+    const rect = wrapperRef.current.getBoundingClientRect();
+    setPickerOpen(false);
+    useSettingsPanel.getState().close();
+    setConnectionPicker({
+      origin: { nodeId: node.id, handleId: port.id, handleType: handle.type },
+      position: screenToFlowPosition({ x: point.clientX, y: point.clientY }),
+      anchor: { x: point.clientX - rect.left, y: point.clientY - rect.top },
+      portKind: port.kind,
+      label: `${def.label} · ${port.label}`,
+    });
+  }, [screenToFlowPosition]);
   const fitVisible = useCallback((nodeId?: string) => {
     const composerHeight = composerOpen ? document.querySelector('.composer-panel')?.getBoundingClientRect().height ?? 324 : 0;
     const selectedIds = new Set<string>();
@@ -128,7 +184,7 @@ function CanvasInner() {
 
   const handleDoubleClick = useCallback(
     (event: React.MouseEvent) => {
-      if ((event.target as HTMLElement).closest('.react-flow__node')) return;
+      if (!(event.target as Element).classList.contains('react-flow__pane')) return;
       const position = screenToFlowPosition({ x: event.clientX, y: event.clientY });
       addNode('prompt', { x: position.x - 110, y: position.y - 20 });
     },
@@ -137,7 +193,7 @@ function CanvasInner() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement | null;
+      const target = event.target instanceof HTMLElement ? event.target : null;
       const typing =
         target &&
         (target.tagName === 'INPUT' ||
@@ -145,6 +201,13 @@ function CanvasInner() {
           target.tagName === 'SELECT' ||
           target.isContentEditable);
       if (typing) return;
+
+      if (event.key === 'Escape') {
+        connectionCancelled.current = true;
+        if (pickerOpen || connectionPicker) closePicker();
+        return;
+      }
+      if (pickerOpen || connectionPicker || target?.closest('[role="dialog"], [aria-modal="true"]')) return;
 
       const mod = event.ctrlKey || event.metaKey;
       if (mod && event.key.toLowerCase() === 'z' && !event.shiftKey) {
@@ -157,11 +220,12 @@ function CanvasInner() {
         redo();
         return;
       }
-      if (!mod && event.key === 'Delete') {
+      if (!mod && (event.key === 'Delete' || event.key === 'Backspace')) {
         const selected = nodes.filter((n) => n.selected).map((n) => n.id);
-        if (selected.length > 0) {
+        const selectedEdges = edges.filter((edge) => edge.selected && edge.deletable !== false).map((edge) => edge.id);
+        if (selected.length > 0 || selectedEdges.length > 0) {
           event.preventDefault();
-          removeNodes(selected);
+          removeElements(selected, selectedEdges);
         }
         return;
       }
@@ -181,7 +245,7 @@ function CanvasInner() {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [duplicateNode, fitVisible, nodes, redo,removeNodes, undo]);
+  }, [closePicker, connectionPicker, duplicateNode, edges, fitVisible, nodes, pickerOpen, redo, removeElements, undo]);
 
   const zoomPercent = Math.round(viewport.zoom * 100);
   const ctlBtn = 'rounded-md px-1.5 text-[11px]';
@@ -189,7 +253,8 @@ function CanvasInner() {
   return (
     <div
       ref={wrapperRef}
-      className="relative h-full w-full"
+      tabIndex={-1}
+      className="relative h-full w-full outline-none"
       onDrop={handleDrop}
       onDragOver={(e) => e.preventDefault()}
     >
@@ -197,12 +262,23 @@ function CanvasInner() {
         nodes={nodes}
         edges={edges}
         nodeTypes={nodeTypes}
+        edgeTypes={edgeTypes}
         onNodesChange={(changes: NodeChange<CanvasNode>[]) => onNodesChange(changes)}
         onEdgesChange={(changes: EdgeChange<CanvasEdge>[]) => onEdgesChange(changes)}
         onConnect={(connection: Connection) => {
           onConnect(connection);
         }}
+        onConnectStart={() => {
+          connectionCancelled.current = false;
+          setPickerOpen(false);
+          setConnectionPicker(null);
+        }}
+        onConnectEnd={handleConnectEnd}
         onNodeClick={(_, node) => setSelectedNode(node.id)}
+        onEdgeClick={() => {
+          setSelectedNode(null);
+          useSettingsPanel.getState().close();
+        }}
         onPaneClick={() => {
           setSelectedNode(null);
           useSettingsPanel.getState().close();
@@ -289,7 +365,10 @@ function CanvasInner() {
             <button
               type="button"
               className="!h-9 !w-9 !rounded-full !bg-mist-100 !text-[16px] !text-ink-900 hover:!bg-white"
-              onClick={() => setPickerOpen((v) => !v)}
+              onClick={() => {
+                setConnectionPicker(null);
+                setPickerOpen((v) => !v);
+              }}
               data-active={pickerOpen}
               title="添加节点"
             >
@@ -336,7 +415,20 @@ function CanvasInner() {
       </ReactFlow>
 
       {/* 「添加节点」菜单：挂在画布容器上，避免被节点层裁剪 */}
-      {pickerOpen && <NodePickerMenu onClose={() => setPickerOpen(false)} />}
+      {pickerOpen && <NodePickerMenu onClose={closePicker} />}
+      {connectionPicker && <NodePickerMenu onClose={closePicker} connection={{
+        anchor: connectionPicker.anchor,
+        portKind: connectionPicker.portKind,
+        direction: connectionPicker.origin.handleType,
+        label: connectionPicker.label,
+        onSelect: (kind, handleId) => {
+          const { position, origin } = connectionPicker;
+          useGraph.getState().addConnectedNode(kind, {
+            x: position.x - (origin.handleType === 'target' ? 260 : 0),
+            y: position.y - 60,
+          }, origin, handleId);
+        },
+      }} />}
       {importError && <div role="alert" className="absolute left-4 top-4 z-30 max-w-[350px] rounded-xl border border-rose-500/40 bg-ink-900 p-3 text-[12px] text-rose-300">{importError}<button type="button" className="ml-3" aria-label="关闭导入错误" onClick={() => setImportError(null)}>×</button></div>}
 
       <input
