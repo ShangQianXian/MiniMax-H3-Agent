@@ -3,8 +3,9 @@ import { createPortal } from 'react-dom';
 import type { VideoMetadata } from '@h3/shared';
 import { api, type AssetRecord } from '../api/client.ts';
 import { useGraph } from '../store/graph.ts';
+import { FrameWorkspace } from './FrameWorkspace.tsx';
 
-interface Props {
+export interface MediaPreviewProps {
   src: string;
   kind: 'image' | 'video';
   name?: string;
@@ -12,25 +13,30 @@ interface Props {
   taskId?: string;
   nodeId?: string;
 }
+type Props = MediaPreviewProps;
 
 /** Canvas thumbnails use intrinsic aspect ratios; the dialog offers unscaled pixel dimensions. */
 export function MediaPreview(props: Props) {
   const [size, setSize] = useState({ width: 0, height: 0 });
-  const [mode, setMode] = useState<'view' | 'edit' | null>(null);
+  const [mode, setMode] = useState<'view' | 'edit' | 'frames' | null>(null);
+  const video = useRef<HTMLVideoElement>(null);
+  const open = (next: 'view' | 'edit' | 'frames') => { video.current?.pause(); setMode(next); };
   useEffect(() => { setSize({ width: 0, height: 0 }); setMode(null); }, [props.src]);
   return <div className="media-preview nodrag nopan nowheel" onClick={(event) => event.stopPropagation()}>
     {props.kind === 'image' ? <img src={props.src} alt={props.name ?? '图片'} draggable={false}
       onLoad={(event) => setSize({ width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight })}
       onDoubleClick={() => setMode('view')} /> :
-      <video src={props.src} controls muted playsInline preload="metadata"
+      <video ref={video} src={props.src} controls muted playsInline preload="metadata"
         onLoadedMetadata={(event) => setSize({ width: event.currentTarget.videoWidth, height: event.currentTarget.videoHeight })} />}
     <div className="media-preview-actions">
       <span>{size.width > 0 ? `${size.width} × ${size.height}` : '读取尺寸…'}</span>
-      <button type="button" className="btn btn-xs" onClick={() => setMode('view')}>原始尺寸</button>
+      <button type="button" className="btn btn-xs" onClick={() => open('view')}>原始尺寸</button>
       {props.kind === 'video' && (props.assetId || props.taskId || props.src.startsWith('/api/assets/')) &&
-        <button type="button" className="btn btn-xs" onClick={() => setMode('edit')}>按帧剪辑</button>}
+        <><button type="button" className="btn btn-xs" onClick={() => open('frames')}>逐帧分解</button>
+          <button type="button" className="btn btn-xs" onClick={() => open('edit')}>按帧剪辑</button></>}
     </div>
-    {mode && <MediaDialog key={`${props.src}:${mode}`} {...props} initialMode={mode} size={size} onClose={() => setMode(null)} />}
+    {mode === 'frames' ? <FrameWorkspace {...props} onClose={() => setMode(null)} /> :
+      mode && <MediaDialog key={`${props.src}:${mode}`} {...props} initialMode={mode} size={size} onClose={() => setMode(null)} />}
   </div>;
 }
 
@@ -53,6 +59,7 @@ export function MediaDialog({ initialMode, size, onClose, ...props }: Props & {
   const [end, setEnd] = useState(1);
   const [result, setResult] = useState<AssetRecord | null>(null);
   const [added, setAdded] = useState(false);
+  const [decomposing, setDecomposing] = useState(false);
   const workflowId = useRef(useGraph.getState().activeWorkflowId);
   const exported = useRef<Awaited<ReturnType<typeof api.trimVideo>> | null>(null);
 
@@ -118,6 +125,8 @@ export function MediaDialog({ initialMode, size, onClose, ...props }: Props & {
   const dimensions = { width: width || undefined, height: height || undefined };
   const clipDuration = metadata && valid ? (metadata.frameTimes[end] ?? metadata.durationSec) - metadata.frameTimes[start - 1]! : 0;
 
+  if (decomposing) return <FrameWorkspace {...props} onClose={onClose} />;
+
   return createPortal(<dialog ref={dialog} className="media-dialog" aria-label={editing ? '按帧剪辑' : '原始尺寸预览'}
     onCancel={(event) => { event.preventDefault(); if (!busy) onClose(); }}
     onClick={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()}
@@ -132,6 +141,9 @@ export function MediaDialog({ initialMode, size, onClose, ...props }: Props & {
       <div><strong>{editing ? '按帧剪辑' : '原始尺寸预览'}</strong><p>{props.name || '生成结果'}{width > 0 && ` · ${width} × ${height}`}</p></div>
       <div className="media-dialog-buttons">
         <button type="button" className="btn btn-xs" onClick={() => setFit(!fit)}>{fit ? '原始尺寸 · 100%' : '适应窗口'}</button>
+        {props.kind === 'video' && <button type="button" className="btn btn-xs" disabled={busy} onClick={() => {
+          dialog.current?.querySelector('video')?.pause(); setDecomposing(true);
+        }}>逐帧分解</button>}
         {!editing && props.kind === 'video' && <button type="button" className="btn btn-xs" onClick={() => { setEditing(true); setFit(true); }}>按帧剪辑</button>}
         <button type="button" className="btn" disabled={busy} onClick={onClose} aria-label="关闭预览">关闭</button>
       </div>

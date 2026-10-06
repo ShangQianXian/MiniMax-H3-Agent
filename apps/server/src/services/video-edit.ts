@@ -1,11 +1,11 @@
 import { execFile } from 'node:child_process';
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import ffmpeg from '@ffmpeg-installer/ffmpeg';
 import ffprobe from '@ffprobe-installer/ffprobe';
-import type { VideoMetadata, VideoTrimRequest } from '@h3/shared';
+import { FRAME_SHEET_COLUMNS, FRAME_SHEET_SIZE, type VideoFrameExportRequest, type VideoMetadata, type VideoTrimRequest } from '@h3/shared';
 import type { AssetService } from './assets.ts';
 
 const exec = promisify(execFile);
@@ -62,7 +62,9 @@ export async function probeVideo(path: string): Promise<Probe> {
 
 export class VideoEditService {
   private cache = new Map<string, Promise<Probe>>();
+  private sheets = new Map<string, Promise<Buffer>>();
   private active = 0;
+  private waiting: Array<() => void> = [];
   private assets: AssetService;
   constructor(assets: AssetService) { this.assets = assets; }
 
@@ -76,9 +78,14 @@ export class VideoEditService {
   }
 
   private async limited<T>(work: () => Promise<T>): Promise<T> {
-    if (this.active >= 2) throw new VideoEditError('视频处理繁忙，请稍后重试。', 429);
-    this.active++;
-    try { return await work(); } finally { this.active--; }
+    if (this.active >= 2) {
+      if (this.waiting.length >= 32) throw new VideoEditError('视频处理繁忙，请稍后重试。', 429);
+      await new Promise<void>((resolve) => this.waiting.push(resolve));
+    } else this.active++;
+    try { return await work(); } finally {
+      const next = this.waiting.shift();
+      if (next) next(); else this.active--;
+    }
   }
 
   async metadata(id: string): Promise<Probe> {
@@ -106,6 +113,76 @@ export class VideoEditService {
         '-vf', `select=eq(n\\,${index})`, '-frames:v', '1', '-f', 'image2pipe', '-vcodec', 'mjpeg', 'pipe:1'],
       { ...processOptions, encoding: 'buffer' });
       return result.stdout;
+    });
+  }
+
+  async frameSheet(id: string, page: number): Promise<Buffer> {
+    const { file } = this.source(id);
+    const metadata = await this.metadata(id);
+    if (!Number.isSafeInteger(page) || page < 0 || page * FRAME_SHEET_SIZE >= metadata.frameCount) {
+      throw new VideoEditError('缩略图范围超出视频总帧数。', 400);
+    }
+    const info = await stat(file.path);
+    const key = `${id}:${info.size}:${info.mtimeMs}:${page}`;
+    let pending = this.sheets.get(key);
+    if (!pending) {
+      // Bounded, shared cache prevents one decoder process per thumbnail or browser request.
+      if (this.sheets.size >= 32) this.sheets.delete(this.sheets.keys().next().value!);
+      const start = page * FRAME_SHEET_SIZE;
+      pending = this.limited(async () => {
+        const filter = `trim=start_frame=${start}:end_frame=${start + FRAME_SHEET_SIZE},setpts=PTS-STARTPTS,` +
+          `scale=160:90:force_original_aspect_ratio=decrease,pad=160:90:(ow-iw)/2:(oh-ih)/2,setsar=1,` +
+          `tile=${FRAME_SHEET_COLUMNS}x${FRAME_SHEET_SIZE / FRAME_SHEET_COLUMNS}`;
+        const result = await exec(ffmpegPath, ['-v', 'error', '-nostdin', '-i', file.path,
+          '-vf', filter, '-frames:v', '1', '-an', '-f', 'image2pipe', '-vcodec', 'mjpeg', '-q:v', '3', 'pipe:1'],
+        { ...processOptions, encoding: 'buffer' });
+        if (!result.stdout.length) throw new VideoEditError('缩略图读取失败，请重试。');
+        return result.stdout;
+      });
+      this.sheets.set(key, pending);
+      pending.catch(() => this.sheets.delete(key));
+    }
+    return pending;
+  }
+
+  async exportFrames(id: string, request: VideoFrameExportRequest) {
+    const { asset, file } = this.source(id);
+    if (!Array.isArray(request.frames) || !request.frames.length || request.frames.length > 100_000 ||
+      request.frames.some((n) => !Number.isSafeInteger(n) || n < 0)) {
+      throw new VideoEditError('请选择至少一帧，帧编号必须是有效整数。', 400);
+    }
+    const metadata = await this.metadata(id);
+    const frames = [...new Set(request.frames)].sort((a, b) => a - b);
+    if (frames.at(-1)! >= metadata.frameCount) throw new VideoEditError('所选帧超出视频总帧数。', 400);
+    const runs: Array<{ start: number; end: number }> = [];
+    for (const frame of frames) {
+      const last = runs.at(-1);
+      if (last && frame === last.end + 1) last.end = frame;
+      else runs.push({ start: frame, end: frame });
+    }
+    if (runs.length > 2000) throw new VideoEditError('所选帧过于分散，请分批导出（每次最多 2000 个不连续片段）。', 400);
+    return this.limited(async () => {
+      const directory = await mkdtemp(join(tmpdir(), 'h3-frames-'));
+      try {
+        const output = join(directory, 'frames.mp4');
+        const script = join(directory, 'select.txt');
+        const expression = runs.map(({ start, end }) => start === end ? `eq(n,${start})` : `between(n,${start},${end})`).join('+');
+        // A script avoids Windows command-line length limits for scattered selections.
+        await writeFile(script, `select='${expression}',setpts=N/(${metadata.fps}*TB)`);
+        await exec(ffmpegPath, ['-v', 'error', '-nostdin', '-i', file.path, '-map', '0:v:0',
+          '-filter_script:v', script, '-an', '-vsync', '0', '-r', String(metadata.fps),
+          '-c:v', 'libx264', '-preset', 'fast', '-crf', '18',
+          '-pix_fmt', metadata.width % 2 || metadata.height % 2 ? 'yuv444p' : 'yuv420p',
+          '-movflags', '+faststart', output], processOptions);
+        const result = await probeVideo(output);
+        if (result.frameCount !== frames.length || result.width !== metadata.width || result.height !== metadata.height) {
+          throw new VideoEditError('导出视频的帧数或尺寸校验失败，请重试。');
+        }
+        const buffer = await readFile(output);
+        const saved = await this.assets.saveUpload({ buffer, mime: 'video/mp4', kind: 'video', projectId: asset.projectId,
+          originalName: `${asset.originalName.replace(/\.[^.]+$/, '')}_选帧${frames.length}帧.mp4`, durationSec: result.durationSec });
+        return { asset: saved, metadata: result, dataUri: `data:video/mp4;base64,${buffer.toString('base64')}` };
+      } finally { await rm(directory, { recursive: true, force: true }); }
     });
   }
 

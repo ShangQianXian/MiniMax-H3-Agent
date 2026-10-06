@@ -19,6 +19,7 @@ let base: string;
 let source: AssetRecord;
 let silent: AssetRecord;
 let variable: AssetRecord;
+let longer: AssetRecord;
 
 beforeAll(async () => {
   dir = await mkdtemp(join(tmpdir(), 'h3-frame-test-'));
@@ -32,6 +33,9 @@ beforeAll(async () => {
   source = await make('audio.mp4', ['-f', 'lavfi', '-i', 'sine=frequency=440:duration=2', '-c:a', 'aac', '-shortest']);
   silent = await make('silent.mp4', []);
   variable = await make('variable.mp4', ['-vf', 'select=not(mod(n\\,3))+not(mod(n\\,5))', '-vsync', '0']);
+  const longPath = join(dir, 'long.mp4');
+  await exec(ffmpegPath, ['-v', 'error', '-stream_loop', '1', '-i', silent.localPath, '-c', 'copy', longPath], { windowsHide: true });
+  longer = await ctx.assets.saveUpload({ buffer: await readFile(longPath), kind: 'video', mime: 'video/mp4', projectId: null });
   server = createApp(ctx).listen(0, '127.0.0.1');
   await new Promise<void>((resolve) => server.once('listening', resolve));
   const address = server.address() as { port: number };
@@ -116,4 +120,61 @@ it('拒绝非法范围、非视频素材和缺失素材', async () => {
   expect((await fetch(`${base}/missing/video-metadata`)).status).toBe(404);
   const invalid = await ctx.assets.saveUpload({ buffer: Buffer.from('invalid'), mime: 'video/mp4', kind: 'video', projectId: null });
   expect((await fetch(`${base}/${invalid.id}/video-metadata`)).status).toBe(422);
+});
+
+it('批量缩略图包含全部帧，末批不足 100 帧也可读取，并发请求复用结果', async () => {
+  const responses = await Promise.all([0, 1, 0, 1].map((page) => fetch(`${base}/${longer.id}/frame-sheets/${page}`)));
+  const images = await Promise.all(responses.map(async (response) => {
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toContain('image/jpeg');
+    return Buffer.from(await response.arrayBuffer());
+  }));
+  expect(images[0]).toEqual(images[2]); expect(images[1]).toEqual(images[3]);
+  expect(images[0]!.length).toBeGreaterThan(10000);
+  const { writeFile } = await import('node:fs/promises');
+  const sheetPath = join(dir, 'last-sheet.jpg');
+  await writeFile(sheetPath, images[1]!);
+  const tile = (await exec(ffmpegPath, ['-v', 'error', '-i', sheetPath, '-vf', 'crop=160:90:1440:90',
+    '-frames:v', '1', '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1'], { encoding: 'buffer', windowsHide: true })).stdout;
+  const original = (await exec(ffmpegPath, ['-v', 'error', '-i', longer.localPath, '-vf', 'select=eq(n\\,119)',
+    '-frames:v', '1', '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1'], { encoding: 'buffer', windowsHide: true })).stdout;
+  expect(tile.length).toBe(original.length);
+  expect(tile.reduce((sum, byte, i) => sum + Math.abs(byte - original[i]!), 0) / tile.length).toBeLessThan(8);
+  expect((await fetch(`${base}/${longer.id}/frame-sheets/2`)).status).toBe(400);
+});
+
+async function selectFrames(asset: AssetRecord, frames: unknown, status = 200) {
+  const response = await fetch(`${base}/${asset.id}/export-frames`, { method: 'POST',
+    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ frames }) });
+  const body = await response.json() as { asset: AssetRecord; metadata: VideoMetadata; error?: string };
+  expect(response.status, body.error).toBe(status);
+  return body;
+}
+
+it('不连续选帧去重并按源顺序拼接，恰好输出所选画面、原尺寸和帧率，不含音频', async () => {
+  const original = await readFile(source.localPath);
+  const result = await selectFrames(source, [59, 12, 0, 12, 5]);
+  expect(result.metadata).toMatchObject({ width: 160, height: 90, frameCount: 4, hasAudio: false });
+  expect(result.metadata.fps).toBeCloseTo(30000 / 1001, 3);
+  expect(result.metadata.durationSec).toBeCloseTo(4 * 1001 / 30000, 3);
+  expect(await readFile(source.localPath)).toEqual(original);
+  const pixels = async (path: string) => (await exec(ffmpegPath, ['-v', 'error', '-i', path,
+    '-vsync', '0', '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1'], { encoding: 'buffer', windowsHide: true, maxBuffer: 8 * 1024 * 1024 })).stdout;
+  const before = await pixels(source.localPath); const after = await pixels(result.asset.localPath);
+  const bytes = 160 * 90 * 3;
+  [0, 5, 12, 59].forEach((frame, index) => {
+    const a = before.subarray(frame * bytes, (frame + 1) * bytes);
+    const b = after.subarray(index * bytes, (index + 1) * bytes);
+    expect(b.length).toBe(bytes);
+    expect(a.reduce((sum, byte, i) => sum + Math.abs(byte - b[i]!), 0) / bytes).toBeLessThan(8);
+  });
+});
+
+it('选帧支持单帧、完整视频和可变帧率输入，拒绝空选与无效帧', async () => {
+  for (const frame of [0, 59]) expect((await selectFrames(silent, [frame])).metadata.frameCount).toBe(1);
+  expect((await selectFrames(silent, Array.from({ length: 60 }, (_, i) => i))).metadata.frameCount).toBe(60);
+  const vfr = await selectFrames(variable, [0, 3, 12]);
+  expect(vfr.metadata.frameCount).toBe(3);
+  expect(vfr.metadata.frameTimes[2]).toBeCloseTo(2 / vfr.metadata.fps, 3);
+  for (const frames of [[], undefined, '0,1', [null], [-1], [0.5], ['0'], [60]]) await selectFrames(silent, frames, 400);
 });

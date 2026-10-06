@@ -2,7 +2,7 @@
  * 前端 API 客户端：只与同源 /api 通信，由 Vite 代理到本地后端。
  * API Key 从不进入浏览器，前端拿到的永远是掩码。
  */
-import type { SkillTemplate, WorkflowGraph, VideoMetadata, VideoTrimRequest } from '@h3/shared';
+import type { SkillTemplate, WorkflowGraph, VideoMetadata, VideoTrimRequest, VideoFrameExportRequest } from '@h3/shared';
 
 export interface ApiIssue {
   severity: 'error' | 'warning';
@@ -338,6 +338,11 @@ export const api = {
 
   videoMetadata: (id: string) => request<{ metadata: VideoMetadata }>(`/assets/${encodeURIComponent(id)}/video-metadata`),
   videoFrameUrl: (id: string, frame: number) => `/api/assets/${encodeURIComponent(id)}/frames/${frame}`,
+  videoFrameSheetUrl: (id: string, page: number) => `/api/assets/${encodeURIComponent(id)}/frame-sheets/${page}`,
+  exportVideoFrames: (id: string, selection: VideoFrameExportRequest) =>
+    request<{ asset: AssetRecord; metadata: VideoMetadata; dataUri: string }>(`/assets/${encodeURIComponent(id)}/export-frames`, {
+      method: 'POST', body: JSON.stringify(selection),
+    }),
   trimVideo: (id: string, range: VideoTrimRequest) =>
     request<{ asset: AssetRecord; metadata: VideoMetadata; dataUri: string }>(`/assets/${encodeURIComponent(id)}/trim`, {
       method: 'POST', body: JSON.stringify(range),

@@ -45,6 +45,18 @@ export function createAssetRouter(ctx: AppContext): Router {
     } catch (error) { editError(error, res); }
   });
 
+  router.get('/:id/frame-sheets/:page', async (req, res) => {
+    try {
+      const sheet = await videoEdit.frameSheet(param(req, 'id'), Number(param(req, 'page')));
+      res.set({ 'Content-Type': 'image/jpeg', 'Cache-Control': 'private, max-age=3600' }).send(sheet);
+    } catch (error) { editError(error, res); }
+  });
+
+  router.post('/:id/export-frames', async (req, res) => {
+    try { res.json(await videoEdit.exportFrames(param(req, 'id'), { frames: req.body?.frames })); }
+    catch (error) { editError(error, res); }
+  });
+
   router.get('/', (req: Request, res: Response) => {
     const projectId = queryString(req, 'projectId');
     res.json({ items: ctx.assets.list(projectId) });
